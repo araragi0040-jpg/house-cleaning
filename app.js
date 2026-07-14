@@ -4,15 +4,15 @@
   const CONFIG = window.CLEANFLOW_CONFIG || {};
   const API = window.CleanFlowAPI;
   const TODAY = localDateISO(new Date());
-  const STORAGE_KEY = "cleanflow-v008-jobs";
-  const LEGACY_STORAGE_KEYS = ["cleanflow-v007-jobs", "cleanflow-v006-jobs", "cleanflow-v005-jobs", "cleanflow-v004-jobs", "cleanflow-v003-jobs", "cleanflow-v001-jobs"];
-  const SETTINGS_KEY = "cleanflow-v008-invoice-settings";
-  const LEGACY_SETTINGS_KEYS = ["cleanflow-v007-invoice-settings", "cleanflow-v006-invoice-settings", "cleanflow-v005-invoice-settings", "cleanflow-v004-invoice-settings", "cleanflow-v003-invoice-settings"];
-  const STAFF_KEY = "cleanflow-v008-current-staff";
-  const MASTER_KEY = "cleanflow-v008-master";
-  const SESSION_KEY = "cleanflow-v008-session";
-  const LEGACY_STAFF_KEY = "cleanflow-v007-current-staff";
-  const PENDING_KEY_BASE = "cleanflow-v008-pending-sync";
+  const STORAGE_KEY = "cleanflow-v009-jobs";
+  const LEGACY_STORAGE_KEYS = ["cleanflow-v008-jobs", "cleanflow-v007-jobs", "cleanflow-v006-jobs", "cleanflow-v005-jobs", "cleanflow-v004-jobs", "cleanflow-v003-jobs", "cleanflow-v001-jobs"];
+  const SETTINGS_KEY = "cleanflow-v009-invoice-settings";
+  const LEGACY_SETTINGS_KEYS = ["cleanflow-v008-invoice-settings", "cleanflow-v007-invoice-settings", "cleanflow-v006-invoice-settings", "cleanflow-v005-invoice-settings", "cleanflow-v004-invoice-settings", "cleanflow-v003-invoice-settings"];
+  const STAFF_KEY = "cleanflow-v009-current-staff";
+  const MASTER_KEY = "cleanflow-v009-master";
+  const SESSION_KEY = "cleanflow-v009-session";
+  const LEGACY_STAFF_KEY = "cleanflow-v008-current-staff";
+  const PENDING_KEY_BASE = "cleanflow-v009-pending-sync";
   const cloudEnabled = Boolean(API?.isConfigured?.());
   const cloudOnly = Boolean(CONFIG.cloudOnly);
   let session = loadSession();
@@ -26,6 +26,11 @@
     mode: "admin",
     view: "dashboard",
     staffView: "today",
+    staffReturnView: "today",
+    staffListMonth: TODAY.slice(0, 7),
+    staffListScope: "all",
+    staffCalendarMonth: TODAY.slice(0, 7),
+    staffCalendarDate: TODAY,
     selectedJobId: null,
     selectedManualId: null,
     manualFromJob: false,
@@ -626,7 +631,7 @@
           </div>
         </section>
       </div>
-      ${accountsReady ? `<section class="panel account-panel"><div class="panel-header"><div><h2>ログインアカウント</h2><small>PINの再設定や利用停止を行えます</small></div><button class="secondary-btn" id="addAccountBtn">＋ 追加</button></div><div class="panel-body account-list">${userAccounts.map(a=>`<div class="account-row"><div class="account-avatar">${esc((a.name||"利").slice(0,1))}</div><div class="account-main"><strong>${esc(a.name)}</strong><small>${esc(a.loginId)}・${a.role==="admin"?"管理者":"スタッフ"}</small></div><span class="account-badge ${a.active?"active":"disabled"}">${a.active?"利用中":"停止中"}</span><button class="ghost-btn" data-edit-account="${esc(a.loginId)}">設定</button></div>`).join("")}</div></section>` : `<section class="panel account-panel"><div class="panel-body"><div class="notice-box warning"><strong>ログイン管理を有効にするにはGASの更新が必要です</strong><p>同梱のv008版 Code.gsへ更新し、ウェブアプリを再デプロイしてください。</p></div></div></section>`}
+      ${accountsReady ? `<section class="panel account-panel"><div class="panel-header"><div><h2>ログインアカウント</h2><small>PINの再設定や利用停止を行えます</small></div><button class="secondary-btn" id="addAccountBtn">＋ 追加</button></div><div class="panel-body account-list">${userAccounts.map(a=>`<div class="account-row"><div class="account-avatar">${esc((a.name||"利").slice(0,1))}</div><div class="account-main"><strong>${esc(a.name)}</strong><small>${esc(a.loginId)}・${a.role==="admin"?"管理者":"スタッフ"}</small></div><span class="account-badge ${a.active?"active":"disabled"}">${a.active?"利用中":"停止中"}</span><button class="ghost-btn" data-edit-account="${esc(a.loginId)}">設定</button></div>`).join("")}</div></section>` : `<section class="panel account-panel"><div class="panel-body"><div class="notice-box warning"><strong>ログイン管理を有効にするにはGASの更新が必要です</strong><p>同梱のv009版 Code.gsへ更新し、ウェブアプリを再デプロイしてください。</p></div></div></section>`}
       <section class="panel settings-price-panel">
         <div class="panel-header"><div><h2>元請け別単価</h2><small>案件登録時に請求額・担当者支払額を自動入力します</small></div><select id="priceClientSelect" class="filter-select">${clientNames().map(name=>`<option value="${esc(name)}" ${selectedClient===name?"selected":""}>${esc(name)}</option>`).join("")}</select></div>
         <form id="priceMasterForm" class="panel-body">
@@ -649,11 +654,20 @@
 
   function renderStaff() {
     el.modeSwitch.innerHTML = '<span class="mode-icon">⌂</span><span><b>管理者画面へ</b><small>表示を切り替え</small></span>';
-    const titles = { today:"今日の案件", upcoming:"今後の案件", manuals:"手順書", detail:"案件詳細", complete:"作業完了", manualDetail:"手順書" };
+    const titles = {
+      today:"今日の案件",
+      allJobs:"案件一覧",
+      monthCalendar:"月間カレンダー",
+      manuals:"手順書",
+      detail:"案件詳細",
+      complete:"作業完了",
+      manualDetail:"手順書",
+    };
     setHeader(titles[state.staffView] || "今日の案件", "");
     let html = "";
     if (state.staffView === "today") html = renderStaffJobs(true);
-    else if (state.staffView === "upcoming") html = renderStaffJobs(false);
+    else if (state.staffView === "allJobs") html = renderStaffJobList();
+    else if (state.staffView === "monthCalendar") html = renderStaffMonthCalendar();
     else if (state.staffView === "manuals") html = renderStaffManuals();
     else if (state.staffView === "detail") html = renderStaffDetail();
     else if (state.staffView === "complete") html = renderComplete();
@@ -663,28 +677,121 @@
   }
 
   function staffJobs() { return jobs.filter(j=>j.worker===state.currentStaff); }
+  function isOwnStaffJob(job) { return Boolean(job && job.worker === state.currentStaff); }
+  function staffStatusLabel(status) { return ["done","billing","billed"].includes(status) ? "完了" : status === "progress" ? "作業中" : "予定"; }
+
   function renderStaffJobs(todayOnly) {
-    const list = staffJobs().filter(j=>todayOnly?j.date===TODAY:j.date>TODAY).sort((a,b)=>a.date.localeCompare(b.date)||a.start.localeCompare(b.start));
+    const list = staffJobs().filter(j=>todayOnly ? j.date===TODAY : j.date>TODAY).sort((a,b)=>a.date.localeCompare(b.date)||a.start.localeCompare(b.start));
     const selector = session.user.role === "admin" ? `<div class="staff-toolbar"><label>表示する担当者<select id="staffSelector" class="form-control">${staffNames().map(name=>`<option ${state.currentStaff===name?"selected":""}>${esc(name)}</option>`).join("")}</select></label></div>` : "";
-    return `${selector}<div class="staff-job-list">${list.length?list.map(j=>`<article class="staff-job-card"><div class="staff-card-head"><div class="time">${todayOnly?esc(j.start):jpDate(j.date)} ${!todayOnly?esc(j.start):""}</div><span class="status-chip ${j.status}">${statusLabel(j.status)}</span></div><h3>${esc(j.site)}</h3><p>${esc(taskNames(j))}</p><button class="primary-btn" data-staff-job="${j.id}">案件を開く</button></article>`).join(""):'<div class="empty-state"><b>該当する案件はありません</b></div>'}</div>`;
+    return `${selector}<div class="staff-job-list">${list.length?list.map(j=>staffJobCard(j,{showDate:!todayOnly})).join(""):'<div class="empty-state"><b>本日の担当案件はありません</b></div>'}</div>`;
   }
-  function renderStaffNav() { return `<nav class="staff-bottom-nav"><button data-staff-go="today" class="${state.staffView==="today"?"active":""}"><span>⌂</span>今日</button><button data-staff-go="upcoming" class="${state.staffView==="upcoming"?"active":""}"><span>▦</span>今後</button><button data-staff-go="manuals" class="${state.staffView==="manuals"?"active":""}"><span>▧</span>手順書</button>${session.user.role==="admin"?'<button id="staffAdminSwitch"><span>⚙</span>管理</button>':""}</nav>`; }
+
+  function staffJobCard(job, options={}) {
+    const own = isOwnStaffJob(job);
+    const dateText = options.showDate ? `${jpDate(job.date)}　${esc(job.start)}` : esc(job.start);
+    return `<article class="staff-job-card ${own?"own-job":"shared-job"}">
+      <div class="staff-card-head"><div class="time">${dateText}</div><span class="status-chip ${job.status}">${staffStatusLabel(job.status)}</span></div>
+      <h3>${esc(job.site)}</h3>
+      <p>${esc(taskNames(job))}</p>
+      <div class="staff-card-meta"><span>担当：${esc(job.worker || "未設定")}</span>${own?'<span class="mine-badge">自分の案件</span>':'<span class="view-only-badge">閲覧のみ</span>'}</div>
+      <button class="primary-btn" data-staff-job="${job.id}">案件を開く</button>
+    </article>`;
+  }
+
+  function renderStaffJobList() {
+    const month = state.staffListMonth;
+    const list = [...jobs]
+      .filter(job=>monthOf(job.date)===month)
+      .filter(job=>state.staffListScope==="mine" ? isOwnStaffJob(job) : true)
+      .sort((a,b)=>a.date.localeCompare(b.date)||a.start.localeCompare(b.start));
+    return `<div class="staff-list-controls">
+      <label><span>対象月</span><input id="staffListMonth" class="form-control" type="month" value="${esc(month)}"></label>
+      <div class="staff-scope-switch" aria-label="案件表示範囲">
+        <button type="button" data-staff-scope="all" class="${state.staffListScope==="all"?"active":""}">全案件</button>
+        <button type="button" data-staff-scope="mine" class="${state.staffListScope==="mine"?"active":""}">自分の案件</button>
+      </div>
+    </div>
+    <div class="staff-list-summary"><strong>${month.replace("-","年")}月</strong><span>${list.length}件</span></div>
+    <div class="staff-job-list">${list.length?list.map(j=>staffJobCard(j,{showDate:true})).join(""):'<div class="empty-state"><b>該当する案件はありません</b>対象月または表示範囲を変更してください。</div>'}</div>`;
+  }
+
+  function shiftMonth(month, amount) {
+    const [year, mon] = month.split("-").map(Number);
+    const date = new Date(year, mon - 1 + amount, 1);
+    return `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,"0")}`;
+  }
+
+  function monthCalendarCells(month) {
+    const [year, mon] = month.split("-").map(Number);
+    const first = new Date(year, mon-1, 1);
+    const lastDay = new Date(year, mon, 0).getDate();
+    const cells = Array(first.getDay()).fill(null);
+    for (let day=1; day<=lastDay; day++) cells.push(`${month}-${String(day).padStart(2,"0")}`);
+    while (cells.length % 7) cells.push(null);
+    return cells;
+  }
+
+  function renderStaffMonthCalendar() {
+    const month = state.staffCalendarMonth;
+    const monthJobs = jobs.filter(job=>monthOf(job.date)===month);
+    if (!state.staffCalendarDate.startsWith(month)) {
+      state.staffCalendarDate = monthJobs[0]?.date || `${month}-01`;
+    }
+    const selectedJobs = monthJobs.filter(job=>job.date===state.staffCalendarDate).sort((a,b)=>a.start.localeCompare(b.start));
+    const cells = monthCalendarCells(month);
+    return `<div class="staff-month-toolbar">
+      <button class="ghost-btn" type="button" data-staff-month-step="-1" aria-label="前月">‹</button>
+      <input id="staffCalendarMonth" class="form-control" type="month" value="${esc(month)}">
+      <button class="ghost-btn" type="button" data-staff-month-step="1" aria-label="次月">›</button>
+    </div>
+    <section class="staff-month-calendar" aria-label="${esc(month)}の案件カレンダー">
+      <div class="staff-month-weekdays">${["日","月","火","水","木","金","土"].map(day=>`<span>${day}</span>`).join("")}</div>
+      <div class="staff-month-grid">${cells.map(date=>{
+        if(!date) return '<span class="staff-month-day empty" aria-hidden="true"></span>';
+        const dayJobs=monthJobs.filter(job=>job.date===date);
+        const ownCount=dayJobs.filter(isOwnStaffJob).length;
+        const selected=date===state.staffCalendarDate;
+        const today=date===TODAY;
+        return `<button type="button" class="staff-month-day ${selected?"selected":""} ${today?"today":""} ${ownCount?"has-own":""}" data-staff-calendar-day="${date}">
+          <span class="day-number">${Number(date.slice(-2))}</span>
+          ${dayJobs.length?`<span class="job-count">${dayJobs.length}</span>`:""}
+          <span class="calendar-dots">${dayJobs.slice(0,3).map(job=>`<i class="${isOwnStaffJob(job)?"mine":"other"}"></i>`).join("")}</span>
+        </button>`;
+      }).join("")}</div>
+    </section>
+    <div class="selected-day-heading"><strong>${jpDate(state.staffCalendarDate,true)}</strong><span>${selectedJobs.length}件</span></div>
+    <div class="staff-job-list compact-list">${selectedJobs.length?selectedJobs.map(j=>staffJobCard(j,{showDate:false})).join(""):'<div class="empty-state"><b>この日の案件はありません</b>日付を選択すると案件が表示されます。</div>'}</div>`;
+  }
+
+  function renderStaffNav() {
+    const hasAdmin = session.user.role === "admin";
+    return `<nav class="staff-bottom-nav ${hasAdmin?"has-admin":""}">
+      <button data-staff-go="today" class="${state.staffView==="today"?"active":""}"><span>⌂</span>今日</button>
+      <button data-staff-go="allJobs" class="${state.staffView==="allJobs"?"active":""}"><span>▤</span>案件</button>
+      <button data-staff-go="monthCalendar" class="${state.staffView==="monthCalendar"?"active":""}"><span>▦</span>月間</button>
+      <button data-staff-go="manuals" class="${state.staffView==="manuals"?"active":""}"><span>▧</span>手順書</button>
+      ${hasAdmin?'<button id="staffAdminSwitch"><span>⚙</span>管理</button>':""}
+    </nav>`;
+  }
 
   function renderStaffDetail() {
     const job = jobs.find(j=>j.id===state.selectedJobId);
     if (!job) return '<div class="empty-state"><b>案件が見つかりません</b></div>';
+    const own = isOwnStaffJob(job);
     const photoSection = (kind, label) => {
       const items = job.photos?.[kind] || [];
       return `<div class="photo-group"><div class="photo-group-title"><b>${label}</b><span>${items.length}枚</span></div><div class="photo-preview-grid">${items.map((src,i)=>`<div class="photo-preview"><img alt="${esc(label)} ${i+1}" src="${esc(src)}"><button type="button" data-remove-photo="${kind}|${i}" aria-label="写真を削除">×</button></div>`).join("")}<label class="photo-btn compact"><input type="file" accept="image/*" capture="environment" data-photo="${kind}" hidden><span>＋<br>写真を追加</span></label></div></div>`;
     };
     const finished = ["done","billing","billed"].includes(job.status);
-    return `<button class="ghost-btn" data-staff-go="today" style="margin-bottom:12px">‹ 戻る</button>
-      <section class="staff-detail-hero"><div class="staff-hero-status"><small>${jpDate(job.date,true)} ${esc(job.start)}〜${esc(job.end||"")}</small><span class="status-chip ${job.status}">${statusLabel(job.status)}</span></div><h2>${esc(job.site)}</h2><p>${esc(taskNames(job))}</p></section>
-      <section class="staff-section"><h3>現場情報</h3><div class="staff-section-body"><p style="margin-top:0"><strong>${esc(job.address)}</strong></p><div class="inline-actions"><a class="secondary-btn" href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(job.address)}" target="_blank" rel="noopener" style="display:inline-block;text-decoration:none">地図を開く</a>${job.phone?`<a class="ghost-btn" href="tel:${esc(job.phone)}" style="text-decoration:none">電話する</a>`:""}</div></div></section>
+    const returnView = ["today","allJobs","monthCalendar"].includes(state.staffReturnView) ? state.staffReturnView : "today";
+    return `<button class="ghost-btn" data-staff-return="${returnView}" style="margin-bottom:12px">‹ 戻る</button>
+      <section class="staff-detail-hero"><div class="staff-hero-status"><small>${jpDate(job.date,true)} ${esc(job.start)}〜${esc(job.end||"")}</small><span class="status-chip ${job.status}">${staffStatusLabel(job.status)}</span></div><h2>${esc(job.site)}</h2><p>${esc(taskNames(job))}</p><div class="staff-detail-worker">担当：${esc(job.worker||"未設定")}</div></section>
+      ${!own?'<div class="readonly-notice">この案件は他の担当者の案件です。予定と手順のみ確認できます。</div>':""}
+      <section class="staff-section"><h3>現場情報</h3><div class="staff-section-body"><p style="margin-top:0"><strong>${esc(job.address)}</strong></p><div class="inline-actions"><a class="secondary-btn" href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(job.address)}" target="_blank" rel="noopener" style="display:inline-block;text-decoration:none">地図を開く</a>${own&&job.phone?`<a class="ghost-btn" href="tel:${esc(job.phone)}" style="text-decoration:none">電話する</a>`:""}</div></div></section>
       <section class="staff-section"><h3>注意事項</h3><div class="staff-section-body"><div class="notice-box">${esc(job.note||"特別な注意事項はありません。")}</div></div></section>
-      <section class="staff-section"><h3>作業手順</h3><div class="staff-section-body"><div class="manual-link-list">${job.tasks.map(id=>{const m=getManual(id);return `<button class="manual-link-btn" data-staff-manual="${id}"><span>${esc(m.name)}の手順を見る</span><span>›</span></button>`;}).join("")}</div></div></section>
-      <section class="staff-section"><h3>写真</h3><div class="staff-section-body"><div class="photo-groups">${photoSection("before","作業前")}${photoSection("after","作業後")}</div></div></section>
-      <div class="sticky-complete">${finished?`<div class="complete-locked">✓ 作業完了を登録済み</div>`:`<button class="primary-btn" data-complete-job="${job.id}">作業完了へ進む</button>`}</div>`;
+      <section class="staff-section"><h3>作業手順</h3><div class="staff-section-body"><div class="manual-link-list">${job.tasks.map(id=>{const m=getManual(id);return m?`<button class="manual-link-btn" data-staff-manual="${id}"><span>${esc(m.name)}の手順を見る</span><span>›</span></button>`:"";}).join("")}</div></div></section>
+      ${own?`<section class="staff-section"><h3>写真</h3><div class="staff-section-body"><div class="photo-groups">${photoSection("before","作業前")}${photoSection("after","作業後")}</div></div></section>
+      <div class="sticky-complete">${finished?`<div class="complete-locked">✓ 作業完了を登録済み</div>`:`<button class="primary-btn" data-complete-job="${job.id}">作業完了へ進む</button>`}</div>`:""}`;
   }
 
   function renderComplete() {
@@ -738,7 +845,13 @@
     el.content.querySelector("[data-manual-back]")?.addEventListener("click",()=>{state.view="manuals";render();});
 
     el.content.querySelectorAll("[data-staff-go]").forEach(b=>b.addEventListener("click",()=>{state.staffView=b.dataset.staffGo;if(state.staffView==="manuals"){state.selectedJobId=null;state.manualFromJob=false;}render();}));
-    el.content.querySelectorAll("[data-staff-job]").forEach(b=>b.addEventListener("click",()=>{state.selectedJobId=b.dataset.staffJob;state.staffView="detail";render();}));
+    el.content.querySelectorAll("[data-staff-job]").forEach(b=>b.addEventListener("click",()=>{state.staffReturnView=state.staffView;state.selectedJobId=b.dataset.staffJob;state.staffView="detail";render();}));
+    el.content.querySelector("[data-staff-return]")?.addEventListener("click",e=>{state.staffView=e.currentTarget.dataset.staffReturn||"today";render();});
+    document.getElementById("staffListMonth")?.addEventListener("change",e=>{state.staffListMonth=e.target.value||TODAY.slice(0,7);render();});
+    el.content.querySelectorAll("[data-staff-scope]").forEach(b=>b.addEventListener("click",()=>{state.staffListScope=b.dataset.staffScope;render();}));
+    document.getElementById("staffCalendarMonth")?.addEventListener("change",e=>{state.staffCalendarMonth=e.target.value||TODAY.slice(0,7);render();});
+    el.content.querySelectorAll("[data-staff-month-step]").forEach(b=>b.addEventListener("click",()=>{state.staffCalendarMonth=shiftMonth(state.staffCalendarMonth,Number(b.dataset.staffMonthStep));render();}));
+    el.content.querySelectorAll("[data-staff-calendar-day]").forEach(b=>b.addEventListener("click",()=>{state.staffCalendarDate=b.dataset.staffCalendarDay;render();}));
     el.content.querySelectorAll("[data-staff-manual]").forEach(b=>b.addEventListener("click",()=>{state.manualFromJob=state.staffView==="detail";state.selectedManualId=b.dataset.staffManual;state.staffView="manualDetail";render();}));
     el.content.querySelector("[data-staff-manual-back]")?.addEventListener("click",()=>{state.staffView=state.manualFromJob?"detail":"manuals";state.manualFromJob=false;render();});
     el.content.querySelector("[data-complete-job]")?.addEventListener("click",()=>{state.staffView="complete";render();});
@@ -765,6 +878,7 @@
     try {
       const dataUrl = await compressImage(file);
       const job=jobs.find(j=>j.id===state.selectedJobId);
+      if (!isOwnStaffJob(job)) throw new Error("担当外の案件には写真を登録できません");
       job.photos ||= {before:[],after:[]};
       job.photos[input.dataset.photo] ||= [];
       if (job.photos[input.dataset.photo].length >= 4) { showToast("写真は各4枚まで登録できます"); return; }
@@ -802,12 +916,14 @@
   }
   function removePhoto(value) {
     const [kind,indexText]=value.split("|"); const index=Number(indexText); const job=jobs.find(j=>j.id===state.selectedJobId);
+    if(!isOwnStaffJob(job)){showToast("担当外の案件は編集できません");return;}
     if(!job?.photos?.[kind])return; job.photos[kind].splice(index,1); saveJobs(); render(); showToast("写真を削除しました");
   }
 
   function completeJob(e) {
     e.preventDefault();
     const job=jobs.find(j=>j.id===state.selectedJobId);
+    if(!isOwnStaffJob(job)){showToast("担当外の案件は完了登録できません");state.staffView="allJobs";render();return;}
     const hasIssue=document.getElementById("issueSelect").value==="yes";
     const issueText=document.getElementById("issueText")?.value.trim()||"";
     if(hasIssue&&!issueText){showToast("問題内容を入力してください");return;}
@@ -840,7 +956,7 @@
   }
 
   function openAccountModal(account=null, presetName="") {
-    if (!API?.upsertUserAccount) { showToast("GASをv008へ更新してください"); return; }
+    if (!API?.upsertUserAccount) { showToast("GASをv009へ更新してください"); return; }
     const editing=Boolean(account);
     el.modal.innerHTML=`<form id="accountForm"><div class="modal-header"><h2 id="modalTitle">${editing?"アカウント設定":"アカウント追加"}</h2><button class="close-btn" type="button" data-close>×</button></div><div class="modal-body">
       <p class="modal-lead">スタッフは自分の担当案件だけを確認できます。PINは本人へ個別に共有してください。</p>
@@ -1019,7 +1135,7 @@
   }
 
   function exportData() {
-    const payload={version:"v008",exportedAt:new Date().toISOString(),jobs,invoiceSettings,masterData};
+    const payload={version:"v009",exportedAt:new Date().toISOString(),jobs,invoiceSettings,masterData};
     const blob=new Blob([JSON.stringify(payload,null,2)],{type:"application/json"});
     const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download=`cleanflow-backup-${new Date().toISOString().slice(0,10)}.json`; a.click(); URL.revokeObjectURL(url); showToast("バックアップを保存しました");
   }
@@ -1074,7 +1190,11 @@
     const merged = new Map(serverJobs.map(job => [job.id, job]));
     Object.values(pendingSync.jobs).forEach(job => merged.set(job.id, normalizeJob(job)));
     jobs = [...merged.values()];
+    if (session.user.role === "staff") {
+      jobs = jobs.map(job => ({ ...job, billing: 0, pay: 0 }));
+    }
     if (!pendingSync.master && snapshot.masterData && typeof snapshot.masterData === "object") masterData = snapshot.masterData;
+    if (session.user.role === "staff") masterData = { clients: masterData.clients || [], staff: masterData.staff || [], prices: {} };
     if (!pendingSync.invoice && snapshot.invoiceSettings && typeof snapshot.invoiceSettings === "object") invoiceSettings = { ...defaultInvoiceSettings, ...snapshot.invoiceSettings };
     if (session.user.role === "admin") userAccounts = Array.isArray(snapshot.users) ? snapshot.users : [];
     localStorage.setItem(STORAGE_KEY, JSON.stringify(jobs));

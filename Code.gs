@@ -1,5 +1,5 @@
 /**
- * CleanFlow v008 - Google Apps Script backend
+ * CleanFlow v009 - Google Apps Script backend
  *
  * 【導入手順】
  * 1. 新しい Google スプレッドシートを作成します。
@@ -145,15 +145,58 @@ function verifyToken_(token) {
 
 function getSnapshot_(user) {
   const allJobs = readJobs_();
-  const jobs = user.role === "admin" ? allJobs : allJobs.filter(job => String(job.worker || "") === user.name);
+  const master = readConfig_(CF.CONFIG_KEYS.MASTER, null);
+  const jobs = user.role === "admin"
+    ? allJobs
+    : allJobs.map(job => staffJobView_(job, user.name));
   return {
     user: publicUser_(user),
     jobs,
-    masterData: readConfig_(CF.CONFIG_KEYS.MASTER, null),
+    masterData: user.role === "admin" ? master : staffMasterView_(master),
     invoiceSettings: user.role === "admin" ? readConfig_(CF.CONFIG_KEYS.INVOICE, null) : null,
     users: user.role === "admin" ? listUsers_(user) : null,
-    apiVersion: "v008",
+    apiVersion: "v009",
     serverTime: new Date().toISOString(),
+  };
+}
+
+/**
+ * スタッフには全案件の予定を共有しますが、請求額・支払額などの金額情報は返しません。
+ * 担当外案件の写真・電話番号・問題報告も返さず、閲覧用の予定情報に限定します。
+ */
+function staffJobView_(job, staffName) {
+  const own = String(job.worker || "") === String(staffName || "");
+  return sanitizeJob_({
+    id: job.id,
+    date: job.date,
+    start: job.start,
+    end: job.end,
+    client: job.client,
+    site: job.site,
+    address: job.address,
+    phone: own ? job.phone : "",
+    worker: job.worker,
+    tasks: job.tasks,
+    status: job.status,
+    note: job.note,
+    billing: 0,
+    pay: 0,
+    expense: own ? job.expense : 0,
+    issue: own ? job.issue : false,
+    issueText: own ? job.issueText : "",
+    photos: own ? job.photos : { before: [], after: [] },
+    completedAt: own ? job.completedAt : "",
+    reviewedAt: "",
+    updatedAt: job.updatedAt,
+  });
+}
+
+function staffMasterView_(master) {
+  const source = master && typeof master === "object" ? master : {};
+  return {
+    clients: Array.isArray(source.clients) ? source.clients.map(String) : [],
+    staff: Array.isArray(source.staff) ? source.staff.map(String) : [],
+    prices: {},
   };
 }
 
