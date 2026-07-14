@@ -1,14 +1,21 @@
 (() => {
   "use strict";
 
-  const TODAY = "2026-07-14";
-  const STORAGE_KEY = "cleanflow-v005-jobs";
-  const LEGACY_STORAGE_KEYS = ["cleanflow-v004-jobs", "cleanflow-v003-jobs", "cleanflow-v001-jobs"];
-  const SETTINGS_KEY = "cleanflow-v005-invoice-settings";
-  const LEGACY_SETTINGS_KEYS = ["cleanflow-v004-invoice-settings", "cleanflow-v003-invoice-settings"];
-  const STAFF_KEY = "cleanflow-v005-current-staff";
-  const MASTER_KEY = "cleanflow-v005-master";
-  const LEGACY_STAFF_KEY = "cleanflow-v004-current-staff";
+  const CONFIG = window.CLEANFLOW_CONFIG || {};
+  const API = window.CleanFlowAPI;
+  const TODAY = localDateISO(new Date());
+  const STORAGE_KEY = "cleanflow-v006-jobs";
+  const LEGACY_STORAGE_KEYS = ["cleanflow-v005-jobs", "cleanflow-v004-jobs", "cleanflow-v003-jobs", "cleanflow-v001-jobs"];
+  const SETTINGS_KEY = "cleanflow-v006-invoice-settings";
+  const LEGACY_SETTINGS_KEYS = ["cleanflow-v005-invoice-settings", "cleanflow-v004-invoice-settings", "cleanflow-v003-invoice-settings"];
+  const STAFF_KEY = "cleanflow-v006-current-staff";
+  const MASTER_KEY = "cleanflow-v006-master";
+  const SESSION_KEY = "cleanflow-v006-session";
+  const LEGACY_STAFF_KEY = "cleanflow-v005-current-staff";
+  const cloudEnabled = Boolean(API?.isConfigured?.());
+  let session = loadSession();
+  let syncTimer = null;
+  let lastJobFingerprints = new Map();
   const state = {
     mode: "admin",
     view: "dashboard",
@@ -171,6 +178,18 @@
     mobileMenuBtn: document.getElementById("mobileMenuBtn"),
     mobileOverlay: document.getElementById("mobileOverlay"),
     todayLabel: document.getElementById("todayLabel"),
+    loginScreen: document.getElementById("loginScreen"),
+    loginForm: document.getElementById("loginForm"),
+    loginId: document.getElementById("loginId"),
+    loginPin: document.getElementById("loginPin"),
+    loginError: document.getElementById("loginError"),
+    loginButton: document.getElementById("loginButton"),
+    demoLoginHelp: document.getElementById("demoLoginHelp"),
+    loginModeLabel: document.getElementById("loginModeLabel"),
+    syncStatus: document.getElementById("syncStatus"),
+    userMenuButton: document.getElementById("userMenuButton"),
+    userName: document.getElementById("userName"),
+    userInitial: document.getElementById("userInitial"),
   };
 
   let jobs = loadJobs();
@@ -197,9 +216,25 @@
       issueText: job?.issueText || "",
       completedAt: job?.completedAt || "",
       reviewedAt: job?.reviewedAt || "",
+      updatedAt: job?.updatedAt || "",
     };
   }
-  function saveJobs() { localStorage.setItem(STORAGE_KEY, JSON.stringify(jobs)); }
+  function saveJobs() {
+    const now = new Date().toISOString();
+    const changed = [];
+    jobs = jobs.map(job => {
+      const before = jobFingerprint(job);
+      if (lastJobFingerprints.get(job.id) !== before) {
+        const next = { ...job, updatedAt: now };
+        changed.push(next);
+        return next;
+      }
+      return job;
+    });
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(jobs));
+    rememberJobFingerprints();
+    if (cloudEnabled && session?.token && changed.length) queueCloudSync(() => API.upsertJobs(session.token, changed));
+  }
   function loadInvoiceSettings() {
     try {
       const legacy = LEGACY_SETTINGS_KEYS.map(key => localStorage.getItem(key)).find(Boolean);
@@ -207,7 +242,10 @@
       return stored && typeof stored === "object" ? { ...defaultInvoiceSettings, ...stored } : { ...defaultInvoiceSettings };
     } catch { return { ...defaultInvoiceSettings }; }
   }
-  function saveInvoiceSettings() { localStorage.setItem(SETTINGS_KEY, JSON.stringify(invoiceSettings)); }
+  function saveInvoiceSettings() {
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(invoiceSettings));
+    if (cloudEnabled && session?.token && session.user?.role === "admin") queueCloudSync(() => API.saveInvoiceSettings(session.token, invoiceSettings));
+  }
   function loadMasterData() {
     try {
       const stored = JSON.parse(localStorage.getItem(MASTER_KEY) || "null");
@@ -219,7 +257,10 @@
       };
     } catch { return structuredClone(defaultMasterData); }
   }
-  function saveMasterData() { localStorage.setItem(MASTER_KEY, JSON.stringify(masterData)); }
+  function saveMasterData() {
+    localStorage.setItem(MASTER_KEY, JSON.stringify(masterData));
+    if (cloudEnabled && session?.token && session.user?.role === "admin") queueCloudSync(() => API.saveMaster(session.token, masterData));
+  }
   function clientNames() { return masterData.clients; }
   function staffNames() { return masterData.staff; }
   function suggestedAmounts(client, tasks) {
@@ -229,6 +270,53 @@
       sum.pay += Number(rate.pay) || 0;
       return sum;
     }, { billing: 0, pay: 0 });
+  }
+  function localDateISO(date) {
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, "0");
+    const d = String(date.getDate()).padStart(2, "0");
+    return `${y}-${m}-${d}`;
+  }
+  function loadSession() {
+    try {
+      const value = JSON.parse(localStorage.getItem(SESSION_KEY) || "null");
+      if (!value?.user || !value?.token) return null;
+      if (value.expiresAt && Date.now() > new Date(value.expiresAt).getTime()) return null;
+      return value;
+    } catch { return null; }
+  }
+  function saveSession(value) {
+    session = value;
+    if (value) localStorage.setItem(SESSION_KEY, JSON.stringify(value));
+    else localStorage.removeItem(SESSION_KEY);
+  }
+  function jobFingerprint(job) {
+    const copy = { ...job };
+    delete copy.updatedAt;
+    return JSON.stringify(copy);
+  }
+  function rememberJobFingerprints() {
+    lastJobFingerprints = new Map(jobs.map(job => [job.id, jobFingerprint(job)]));
+  }
+  function setSyncStatus(type, label) {
+    if (!el.syncStatus) return;
+    el.syncStatus.className = `sync-status ${type || ""}`.trim();
+    const text = el.syncStatus.querySelector("span");
+    if (text) text.textContent = label;
+  }
+  function queueCloudSync(task) {
+    clearTimeout(syncTimer);
+    setSyncStatus("syncing", "同期中");
+    syncTimer = setTimeout(async () => {
+      try {
+        await task();
+        setSyncStatus("synced", "同期済み");
+      } catch (error) {
+        console.error(error);
+        setSyncStatus("error", "同期エラー");
+        showToast(error.message || "クラウド同期に失敗しました");
+      }
+    }, 250);
   }
   function esc(value) { return String(value ?? "").replace(/[&<>'"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"}[c])); }
   function yen(value) { return new Intl.NumberFormat("ja-JP", { style:"currency", currency:"JPY", maximumFractionDigits:0 }).format(Number(value)||0); }
@@ -253,7 +341,15 @@
   }
 
   function render() {
+    if (!session?.user) return;
+    if (session.user.role === "staff") {
+      state.mode = "staff";
+      state.currentStaff = session.user.name;
+    }
     el.todayLabel.textContent = jpDate(TODAY, true);
+    el.userName.textContent = session.user.name;
+    el.userInitial.textContent = (session.user.name || "利").slice(0, 1);
+    el.modeSwitch.hidden = session.user.role !== "admin";
     el.app.classList.toggle("staff-mode", state.mode === "staff");
     el.app.classList.remove("menu-open");
 
@@ -262,6 +358,7 @@
   }
 
   function renderAdmin() {
+    if (session.user.role !== "admin") { state.mode = "staff"; renderStaff(); return; }
     document.querySelectorAll(".nav-item").forEach(btn => btn.classList.toggle("active", btn.dataset.view === state.view));
     el.modeSwitch.innerHTML = '<span class="mode-icon">▣</span><span><b>スタッフ画面へ</b><small>表示を切り替え</small></span>';
     el.addJobTop.style.display = "inline-flex";
@@ -495,9 +592,10 @@
   function staffJobs() { return jobs.filter(j=>j.worker===state.currentStaff); }
   function renderStaffJobs(todayOnly) {
     const list = staffJobs().filter(j=>todayOnly?j.date===TODAY:j.date>TODAY).sort((a,b)=>a.date.localeCompare(b.date)||a.start.localeCompare(b.start));
-    return `<div class="staff-toolbar"><label>表示する担当者<select id="staffSelector" class="form-control">${staffNames().map(name=>`<option ${state.currentStaff===name?"selected":""}>${esc(name)}</option>`).join("")}</select></label></div><div class="staff-job-list">${list.length?list.map(j=>`<article class="staff-job-card"><div class="staff-card-head"><div class="time">${todayOnly?esc(j.start):jpDate(j.date)} ${!todayOnly?esc(j.start):""}</div><span class="status-chip ${j.status}">${statusLabel(j.status)}</span></div><h3>${esc(j.site)}</h3><p>${esc(taskNames(j))}</p><button class="primary-btn" data-staff-job="${j.id}">案件を開く</button></article>`).join(""):'<div class="empty-state"><b>該当する案件はありません</b></div>'}</div>`;
+    const selector = session.user.role === "admin" ? `<div class="staff-toolbar"><label>表示する担当者<select id="staffSelector" class="form-control">${staffNames().map(name=>`<option ${state.currentStaff===name?"selected":""}>${esc(name)}</option>`).join("")}</select></label></div>` : "";
+    return `${selector}<div class="staff-job-list">${list.length?list.map(j=>`<article class="staff-job-card"><div class="staff-card-head"><div class="time">${todayOnly?esc(j.start):jpDate(j.date)} ${!todayOnly?esc(j.start):""}</div><span class="status-chip ${j.status}">${statusLabel(j.status)}</span></div><h3>${esc(j.site)}</h3><p>${esc(taskNames(j))}</p><button class="primary-btn" data-staff-job="${j.id}">案件を開く</button></article>`).join(""):'<div class="empty-state"><b>該当する案件はありません</b></div>'}</div>`;
   }
-  function renderStaffNav() { return `<nav class="staff-bottom-nav"><button data-staff-go="today" class="${state.staffView==="today"?"active":""}"><span>⌂</span>今日</button><button data-staff-go="upcoming" class="${state.staffView==="upcoming"?"active":""}"><span>▦</span>今後</button><button data-staff-go="manuals" class="${state.staffView==="manuals"?"active":""}"><span>▧</span>手順書</button><button id="staffAdminSwitch"><span>⚙</span>管理</button></nav>`; }
+  function renderStaffNav() { return `<nav class="staff-bottom-nav"><button data-staff-go="today" class="${state.staffView==="today"?"active":""}"><span>⌂</span>今日</button><button data-staff-go="upcoming" class="${state.staffView==="upcoming"?"active":""}"><span>▦</span>今後</button><button data-staff-go="manuals" class="${state.staffView==="manuals"?"active":""}"><span>▧</span>手順書</button>${session.user.role==="admin"?'<button id="staffAdminSwitch"><span>⚙</span>管理</button>':""}</nav>`; }
 
   function renderStaffDetail() {
     const job = jobs.find(j=>j.id===state.selectedJobId);
@@ -594,7 +692,13 @@
       job.photos ||= {before:[],after:[]};
       job.photos[input.dataset.photo] ||= [];
       if (job.photos[input.dataset.photo].length >= 4) { showToast("写真は各4枚まで登録できます"); return; }
-      job.photos[input.dataset.photo].push(dataUrl);
+      let photoUrl = dataUrl;
+      if (cloudEnabled && session?.token) {
+        setSyncStatus("syncing", "写真送信中");
+        const uploaded = await API.uploadPhoto(session.token, { jobId: job.id, kind: input.dataset.photo, dataUrl });
+        photoUrl = uploaded.url;
+      }
+      job.photos[input.dataset.photo].push(photoUrl);
       saveJobs(); render(); showToast("写真を追加しました");
     } catch { showToast("写真を読み込めませんでした"); }
   }
@@ -780,7 +884,7 @@
   }
 
   function exportData() {
-    const payload={version:"v005",exportedAt:new Date().toISOString(),jobs,invoiceSettings,masterData};
+    const payload={version:"v006",exportedAt:new Date().toISOString(),jobs,invoiceSettings,masterData};
     const blob=new Blob([JSON.stringify(payload,null,2)],{type:"application/json"});
     const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download=`cleanflow-backup-${new Date().toISOString().slice(0,10)}.json`; a.click(); URL.revokeObjectURL(url); showToast("バックアップを保存しました");
   }
@@ -793,15 +897,96 @@
 
   function openModal(){el.modalBackdrop.hidden=false;document.body.style.overflow="hidden";}
   function closeModal(){el.modalBackdrop.hidden=true;document.body.style.overflow="";}
-  function switchMode(){state.mode=state.mode==="admin"?"staff":"admin";if(state.mode==="admin"){state.view="dashboard";}else{state.staffView="today";state.selectedJobId=null;}render();}
+  function switchMode(){if(session.user.role!=="admin")return;state.mode=state.mode==="admin"?"staff":"admin";if(state.mode==="admin"){state.view="dashboard";}else{state.staffView="today";state.selectedJobId=null;}render();}
+
+  async function handleLogin(event) {
+    event.preventDefault();
+    const loginId = el.loginId.value.trim();
+    const pin = el.loginPin.value;
+    el.loginError.hidden = true;
+    el.loginButton.disabled = true;
+    el.loginButton.textContent = "確認中…";
+    try {
+      let result;
+      if (cloudEnabled) {
+        result = await API.login(loginId, pin);
+      } else {
+        const demoUsers = {
+          admin: { pin:"1234", user:{ loginId:"admin", name:"管理者", role:"admin" } },
+          yamada: { pin:"1111", user:{ loginId:"yamada", name:"山田", role:"staff" } },
+          sato: { pin:"2222", user:{ loginId:"sato", name:"佐藤", role:"staff" } },
+        };
+        const account = demoUsers[loginId];
+        if (!CONFIG.allowLocalDemo || !account || account.pin !== pin) throw new Error("ログインIDまたはPINが正しくありません");
+        result = { token:`local-${loginId}`, user:account.user, expiresAt:new Date(Date.now()+14*86400000).toISOString() };
+      }
+      saveSession(result);
+      await enterApp();
+    } catch (error) {
+      el.loginError.textContent = error.message || "ログインできませんでした";
+      el.loginError.hidden = false;
+    } finally {
+      el.loginButton.disabled = false;
+      el.loginButton.textContent = "ログイン";
+    }
+  }
+
+  async function loadCloudSnapshot() {
+    setSyncStatus("syncing", "読み込み中");
+    const snapshot = await API.getSnapshot(session.token);
+    if (Array.isArray(snapshot.jobs)) jobs = snapshot.jobs.map(normalizeJob);
+    if (snapshot.masterData && typeof snapshot.masterData === "object") masterData = snapshot.masterData;
+    if (snapshot.invoiceSettings && typeof snapshot.invoiceSettings === "object") invoiceSettings = { ...defaultInvoiceSettings, ...snapshot.invoiceSettings };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(jobs));
+    localStorage.setItem(MASTER_KEY, JSON.stringify(masterData));
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(invoiceSettings));
+    rememberJobFingerprints();
+    setSyncStatus("synced", "同期済み");
+  }
+
+  async function enterApp() {
+    el.loginScreen.hidden = true;
+    el.app.hidden = false;
+    state.mode = session.user.role === "admin" ? "admin" : "staff";
+    state.currentStaff = session.user.role === "staff" ? session.user.name : (masterData.staff[0] || "");
+    if (cloudEnabled) {
+      try { await loadCloudSnapshot(); }
+      catch (error) {
+        if (/期限|ログイン/.test(error.message || "")) { logout(); return; }
+        setSyncStatus("error", "読込エラー");
+        showToast("クラウドデータを読み込めませんでした。端末内データを表示します");
+      }
+    } else {
+      setSyncStatus("", "端末内保存");
+      rememberJobFingerprints();
+    }
+    render();
+  }
+
+  function logout() {
+    saveSession(null);
+    el.app.hidden = true;
+    el.loginScreen.hidden = false;
+    el.loginPin.value = "";
+    el.loginError.hidden = true;
+    closeModal();
+  }
+
+  async function bootstrap() {
+    el.demoLoginHelp.hidden = cloudEnabled || !CONFIG.allowLocalDemo;
+    el.loginModeLabel.textContent = cloudEnabled ? "クラウド共有モード" : "デモモード（この端末内に保存）";
+    el.loginForm.addEventListener("submit", handleLogin);
+    if (session?.user) await enterApp();
+  }
 
   el.nav.addEventListener("click",e=>{const btn=e.target.closest("[data-view]");if(!btn)return;state.view=btn.dataset.view;render();});
   el.modeSwitch.addEventListener("click",switchMode);
   el.addJobTop.addEventListener("click",()=>openJobModal());
+  el.userMenuButton.addEventListener("click",()=>{if(confirm("ログアウトしますか？"))logout();});
   el.modalBackdrop.addEventListener("click",e=>{if(e.target===el.modalBackdrop)closeModal();});
   el.mobileMenuBtn.addEventListener("click",()=>el.app.classList.toggle("menu-open"));
   el.mobileOverlay.addEventListener("click",()=>el.app.classList.remove("menu-open"));
   document.addEventListener("keydown",e=>{if(e.key==="Escape"&&!el.modalBackdrop.hidden)closeModal();});
 
-  render();
+  bootstrap();
 })();
