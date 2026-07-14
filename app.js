@@ -4,15 +4,15 @@
   const CONFIG = window.CLEANFLOW_CONFIG || {};
   const API = window.CleanFlowAPI;
   const TODAY = localDateISO(new Date());
-  const STORAGE_KEY = "cleanflow-v007-jobs";
-  const LEGACY_STORAGE_KEYS = ["cleanflow-v006-jobs", "cleanflow-v005-jobs", "cleanflow-v004-jobs", "cleanflow-v003-jobs", "cleanflow-v001-jobs"];
-  const SETTINGS_KEY = "cleanflow-v007-invoice-settings";
-  const LEGACY_SETTINGS_KEYS = ["cleanflow-v006-invoice-settings", "cleanflow-v005-invoice-settings", "cleanflow-v004-invoice-settings", "cleanflow-v003-invoice-settings"];
-  const STAFF_KEY = "cleanflow-v007-current-staff";
-  const MASTER_KEY = "cleanflow-v007-master";
-  const SESSION_KEY = "cleanflow-v007-session";
-  const LEGACY_STAFF_KEY = "cleanflow-v006-current-staff";
-  const PENDING_KEY_BASE = "cleanflow-v007-pending-sync";
+  const STORAGE_KEY = "cleanflow-v008-jobs";
+  const LEGACY_STORAGE_KEYS = ["cleanflow-v007-jobs", "cleanflow-v006-jobs", "cleanflow-v005-jobs", "cleanflow-v004-jobs", "cleanflow-v003-jobs", "cleanflow-v001-jobs"];
+  const SETTINGS_KEY = "cleanflow-v008-invoice-settings";
+  const LEGACY_SETTINGS_KEYS = ["cleanflow-v007-invoice-settings", "cleanflow-v006-invoice-settings", "cleanflow-v005-invoice-settings", "cleanflow-v004-invoice-settings", "cleanflow-v003-invoice-settings"];
+  const STAFF_KEY = "cleanflow-v008-current-staff";
+  const MASTER_KEY = "cleanflow-v008-master";
+  const SESSION_KEY = "cleanflow-v008-session";
+  const LEGACY_STAFF_KEY = "cleanflow-v007-current-staff";
+  const PENDING_KEY_BASE = "cleanflow-v008-pending-sync";
   const cloudEnabled = Boolean(API?.isConfigured?.());
   const cloudOnly = Boolean(CONFIG.cloudOnly);
   let session = loadSession();
@@ -201,6 +201,7 @@
   let jobs = loadJobs();
   let invoiceSettings = loadInvoiceSettings();
   let masterData = loadMasterData();
+  let userAccounts = [];
   if (!masterData.staff.includes(state.currentStaff)) state.currentStaff = masterData.staff[0] || "";
   if (!masterData.clients.includes(state.settingsClient)) state.settingsClient = masterData.clients[0] || "";
 
@@ -607,6 +608,9 @@
     const selectedClient = masterData.clients.includes(state.settingsClient) ? state.settingsClient : (masterData.clients[0] || "");
     state.settingsClient = selectedClient;
     const rates = masterData.prices[selectedClient] || {};
+    const accountByName = new Map(userAccounts.filter(a=>a.role==="staff").map(a=>[a.name,a]));
+    const staffRows = [...new Set([...masterData.staff, ...userAccounts.filter(a=>a.role==="staff").map(a=>a.name)])];
+    const accountsReady = Array.isArray(userAccounts) && userAccounts.length > 0;
     return `
       <div class="settings-grid">
         <section class="panel">
@@ -616,12 +620,13 @@
           </div>
         </section>
         <section class="panel">
-          <div class="panel-header"><div><h2>担当者</h2><small>スタッフ画面と担当割当に使用します</small></div><button class="secondary-btn" id="addStaffBtn">＋ 追加</button></div>
+          <div class="panel-header"><div><h2>担当者</h2><small>担当割当とスタッフログインをまとめて管理します</small></div><button class="secondary-btn" id="addStaffBtn">＋ アカウント追加</button></div>
           <div class="panel-body master-list">
-            ${staffNames().map(name=>`<div class="master-row"><div><strong>${esc(name)}</strong><small>${jobs.filter(j=>j.worker===name).length}件の案件で使用</small></div><span class="person-chip">利用中</span></div>`).join("") || '<div class="empty-state"><b>担当者が未登録です</b></div>'}
+            ${staffRows.map(name=>{const a=accountByName.get(name);const badge=a?(a.active?'<span class="account-badge active">利用中</span>':'<span class="account-badge disabled">停止中</span>'):'<span class="account-badge pending">ログイン未作成</span>';return `<div class="master-row"><div><strong>${esc(name)}</strong><small>${jobs.filter(j=>j.worker===name).length}件の案件で使用${a?`・ID: ${esc(a.loginId)}`:""}</small></div><div class="master-row-actions">${badge}${a?`<button class="ghost-btn" data-edit-account="${esc(a.loginId)}">設定</button>`:`<button class="ghost-btn" data-create-account-name="${esc(name)}">作成</button>`}</div></div>`;}).join("") || '<div class="empty-state"><b>担当者が未登録です</b></div>'}
           </div>
         </section>
       </div>
+      ${accountsReady ? `<section class="panel account-panel"><div class="panel-header"><div><h2>ログインアカウント</h2><small>PINの再設定や利用停止を行えます</small></div><button class="secondary-btn" id="addAccountBtn">＋ 追加</button></div><div class="panel-body account-list">${userAccounts.map(a=>`<div class="account-row"><div class="account-avatar">${esc((a.name||"利").slice(0,1))}</div><div class="account-main"><strong>${esc(a.name)}</strong><small>${esc(a.loginId)}・${a.role==="admin"?"管理者":"スタッフ"}</small></div><span class="account-badge ${a.active?"active":"disabled"}">${a.active?"利用中":"停止中"}</span><button class="ghost-btn" data-edit-account="${esc(a.loginId)}">設定</button></div>`).join("")}</div></section>` : `<section class="panel account-panel"><div class="panel-body"><div class="notice-box warning"><strong>ログイン管理を有効にするにはGASの更新が必要です</strong><p>同梱のv008版 Code.gsへ更新し、ウェブアプリを再デプロイしてください。</p></div></div></section>`}
       <section class="panel settings-price-panel">
         <div class="panel-header"><div><h2>元請け別単価</h2><small>案件登録時に請求額・担当者支払額を自動入力します</small></div><select id="priceClientSelect" class="filter-select">${clientNames().map(name=>`<option value="${esc(name)}" ${selectedClient===name?"selected":""}>${esc(name)}</option>`).join("")}</select></div>
         <form id="priceMasterForm" class="panel-body">
@@ -744,7 +749,10 @@
     el.content.querySelectorAll("[data-remove-photo]").forEach(btn=>btn.addEventListener("click",()=>removePhoto(btn.dataset.removePhoto)));
     const issueSelect=document.getElementById("issueSelect"); issueSelect?.addEventListener("change",()=>{document.getElementById("issueFields").hidden=issueSelect.value!=="yes";});
     document.getElementById("addClientBtn")?.addEventListener("click",()=>openAddMasterModal("client"));
-    document.getElementById("addStaffBtn")?.addEventListener("click",()=>openAddMasterModal("staff"));
+    document.getElementById("addStaffBtn")?.addEventListener("click",()=>openAccountModal());
+    document.getElementById("addAccountBtn")?.addEventListener("click",()=>openAccountModal());
+    el.content.querySelectorAll("[data-edit-account]").forEach(b=>b.addEventListener("click",()=>openAccountModal(userAccounts.find(a=>a.loginId===b.dataset.editAccount))));
+    el.content.querySelectorAll("[data-create-account-name]").forEach(b=>b.addEventListener("click",()=>openAccountModal(null,b.dataset.createAccountName)));
     document.getElementById("settingsInvoiceBtn")?.addEventListener("click",openInvoiceSettings);
     document.getElementById("priceClientSelect")?.addEventListener("change",e=>{state.settingsClient=e.target.value;render();});
     el.content.querySelectorAll("[data-edit-price]").forEach(b=>b.addEventListener("click",()=>{state.settingsClient=b.dataset.editPrice;render();document.querySelector(".settings-price-panel")?.scrollIntoView({behavior:"smooth",block:"start"});}));
@@ -829,6 +837,61 @@
       saveMasterData();closeModal();render();showToast(`${label}を追加しました`);
     });
     setTimeout(()=>document.getElementById("masterNameInput")?.focus(),0);
+  }
+
+  function openAccountModal(account=null, presetName="") {
+    if (!API?.upsertUserAccount) { showToast("GASをv008へ更新してください"); return; }
+    const editing=Boolean(account);
+    el.modal.innerHTML=`<form id="accountForm"><div class="modal-header"><h2 id="modalTitle">${editing?"アカウント設定":"アカウント追加"}</h2><button class="close-btn" type="button" data-close>×</button></div><div class="modal-body">
+      <p class="modal-lead">スタッフは自分の担当案件だけを確認できます。PINは本人へ個別に共有してください。</p>
+      <div class="form-grid">
+        <div class="form-group"><label>ログインID *</label><input name="loginId" class="form-control" value="${esc(account?.loginId||"")}" ${editing?"readonly":""} pattern="[A-Za-z0-9._-]{3,40}" placeholder="例：tanaka" required></div>
+        <div class="form-group"><label>表示名 *</label><input name="name" class="form-control" value="${esc(account?.name||presetName)}" placeholder="例：田中" required></div>
+        <div class="form-group"><label>権限 *</label><select name="role" class="form-control"><option value="staff" ${account?.role!=="admin"?"selected":""}>スタッフ</option><option value="admin" ${account?.role==="admin"?"selected":""}>管理者</option></select></div>
+        <div class="form-group"><label>${editing?"新しいPIN（変更時のみ）":"初期PIN *"}</label><input name="pin" class="form-control" type="password" inputmode="numeric" pattern="[0-9]{4,12}" minlength="4" maxlength="12" ${editing?"":"required"} placeholder="4〜12桁の数字"></div>
+      </div>
+      <label class="toggle-row"><input name="active" type="checkbox" ${account?.active!==false?"checked":""}><span><strong>このアカウントを利用可能にする</strong><small>停止するとログインできなくなります</small></span></label>
+    </div><div class="modal-footer"><button type="button" class="ghost-btn" data-close>キャンセル</button><button class="primary-btn" type="submit">保存</button></div></form>`;
+    openModal();
+    el.modal.querySelectorAll("[data-close]").forEach(b=>b.addEventListener("click",closeModal));
+    document.getElementById("accountForm").addEventListener("submit",async e=>{
+      e.preventDefault();
+      const button=e.currentTarget.querySelector('button[type="submit"]');
+      const fd=new FormData(e.currentTarget);
+      const payload={loginId:String(fd.get("loginId")||"").trim(),name:String(fd.get("name")||"").trim(),role:String(fd.get("role")||"staff"),pin:String(fd.get("pin")||""),active:fd.get("active")==="on"};
+      button.disabled=true;button.textContent="保存中…";
+      try {
+        const oldName=account?.name||"";
+        const saved=await API.upsertUserAccount(session.token,payload);
+        const idx=userAccounts.findIndex(a=>a.loginId===saved.loginId);
+        if(idx>=0)userAccounts[idx]=saved;else userAccounts.push(saved);
+        if(oldName && oldName!==saved.name){jobs.forEach(j=>{if(j.worker===oldName){j.worker=saved.name;j.updatedAt=new Date().toISOString();}});masterData.staff=masterData.staff.map(n=>n===oldName?saved.name:n);saveJobs();}
+        if(saved.role==="staff"&&saved.active&&!masterData.staff.includes(saved.name))masterData.staff.push(saved.name);
+        if(saved.role!=="staff"||!saved.active)masterData.staff=masterData.staff.filter(n=>n!==saved.name);
+        if(saved.loginId===session.user.loginId){session={...session,user:{...session.user,name:saved.name,role:saved.role}};saveSession(session);}
+        saveMasterData();
+        closeModal();render();showToast("アカウントを保存しました");
+      }catch(error){showToast(error.message||"アカウントを保存できませんでした");button.disabled=false;button.textContent="保存";}
+    });
+  }
+
+  function openUserMenu() {
+    el.modal.innerHTML=`<div class="modal-header"><h2 id="modalTitle">${esc(session.user.name)}</h2><button class="close-btn" type="button" data-close>×</button></div><div class="modal-body"><div class="account-menu-info"><span>${esc(session.user.loginId)}</span><span>${session.user.role==="admin"?"管理者":"スタッフ"}</span></div><div class="account-menu-actions"><button id="changePinBtn" class="secondary-btn" type="button">PINを変更</button><button id="logoutBtn" class="ghost-btn danger-text" type="button">ログアウト</button></div></div>`;
+    openModal();
+    el.modal.querySelectorAll("[data-close]").forEach(b=>b.addEventListener("click",closeModal));
+    document.getElementById("changePinBtn").addEventListener("click",openChangePinModal);
+    document.getElementById("logoutBtn").addEventListener("click",logout);
+  }
+
+  function openChangePinModal() {
+    el.modal.innerHTML=`<form id="changePinForm"><div class="modal-header"><h2 id="modalTitle">PINを変更</h2><button class="close-btn" type="button" data-close>×</button></div><div class="modal-body"><div class="form-group"><label>現在のPIN</label><input name="currentPin" class="form-control" type="password" inputmode="numeric" required></div><div class="form-group"><label>新しいPIN</label><input name="newPin" class="form-control" type="password" inputmode="numeric" pattern="[0-9]{4,12}" minlength="4" maxlength="12" required></div><div class="form-group"><label>新しいPIN（確認）</label><input name="confirmPin" class="form-control" type="password" inputmode="numeric" required></div></div><div class="modal-footer"><button type="button" class="ghost-btn" data-close>キャンセル</button><button class="primary-btn" type="submit">変更する</button></div></form>`;
+    el.modal.querySelectorAll("[data-close]").forEach(b=>b.addEventListener("click",closeModal));
+    document.getElementById("changePinForm").addEventListener("submit",async e=>{
+      e.preventDefault();const fd=new FormData(e.currentTarget);const current=String(fd.get("currentPin")||"");const next=String(fd.get("newPin")||"");const confirmPin=String(fd.get("confirmPin")||"");
+      if(next!==confirmPin){showToast("新しいPINが一致しません");return;}
+      const button=e.currentTarget.querySelector('button[type="submit"]');button.disabled=true;button.textContent="変更中…";
+      try{await API.changePin(session.token,current,next);closeModal();showToast("PINを変更しました");}catch(error){showToast(error.message||"PINを変更できませんでした");button.disabled=false;button.textContent="変更する";}
+    });
   }
 
   function savePriceMaster(event) {
@@ -956,7 +1019,7 @@
   }
 
   function exportData() {
-    const payload={version:"v007",exportedAt:new Date().toISOString(),jobs,invoiceSettings,masterData};
+    const payload={version:"v008",exportedAt:new Date().toISOString(),jobs,invoiceSettings,masterData};
     const blob=new Blob([JSON.stringify(payload,null,2)],{type:"application/json"});
     const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download=`cleanflow-backup-${new Date().toISOString().slice(0,10)}.json`; a.click(); URL.revokeObjectURL(url); showToast("バックアップを保存しました");
   }
@@ -1013,6 +1076,7 @@
     jobs = [...merged.values()];
     if (!pendingSync.master && snapshot.masterData && typeof snapshot.masterData === "object") masterData = snapshot.masterData;
     if (!pendingSync.invoice && snapshot.invoiceSettings && typeof snapshot.invoiceSettings === "object") invoiceSettings = { ...defaultInvoiceSettings, ...snapshot.invoiceSettings };
+    if (session.user.role === "admin") userAccounts = Array.isArray(snapshot.users) ? snapshot.users : [];
     localStorage.setItem(STORAGE_KEY, JSON.stringify(jobs));
     localStorage.setItem(MASTER_KEY, JSON.stringify(masterData));
     localStorage.setItem(SETTINGS_KEY, JSON.stringify(invoiceSettings));
@@ -1099,7 +1163,7 @@
   el.nav.addEventListener("click",e=>{const btn=e.target.closest("[data-view]");if(!btn)return;state.view=btn.dataset.view;render();});
   el.modeSwitch.addEventListener("click",switchMode);
   el.addJobTop.addEventListener("click",()=>openJobModal());
-  el.userMenuButton.addEventListener("click",()=>{if(confirm("ログアウトしますか？"))logout();});
+  el.userMenuButton.addEventListener("click",openUserMenu);
   el.syncStatus.addEventListener("click",()=>syncNow(true).catch(()=>{}));
   window.addEventListener("focus",()=>{
     if (session?.token && Date.now()-lastCloudPullAt>60000 && !syncInFlight) syncNow(false).catch(()=>{});

@@ -1,5 +1,5 @@
 /**
- * CleanFlow v007 - Google Apps Script backend（v006互換）
+ * CleanFlow v008 - Google Apps Script backend
  *
  * 【導入手順】
  * 1. 新しい Google スプレッドシートを作成します。
@@ -42,6 +42,9 @@ function doPost(e) {
     const user = verifyToken_(token);
     if (action === "ping") return jsonOk_({ user: publicUser_(user), serverTime: new Date().toISOString() });
     if (action === "getSnapshot") return jsonOk_(getSnapshot_(user));
+    if (action === "listUsers") return jsonOk_(listUsers_(user));
+    if (action === "upsertUserAccount") return jsonOk_(upsertUserAccount_(user, payload));
+    if (action === "changePin") return jsonOk_(changePin_(user, payload));
     if (action === "upsertJobs") return jsonOk_(upsertJobs_(user, payload.jobs));
     if (action === "saveMaster") return jsonOk_(saveConfig_(user, CF.CONFIG_KEYS.MASTER, payload.masterData));
     if (action === "saveInvoiceSettings") return jsonOk_(saveConfig_(user, CF.CONFIG_KEYS.INVOICE, payload.invoiceSettings));
@@ -148,8 +151,69 @@ function getSnapshot_(user) {
     jobs,
     masterData: readConfig_(CF.CONFIG_KEYS.MASTER, null),
     invoiceSettings: user.role === "admin" ? readConfig_(CF.CONFIG_KEYS.INVOICE, null) : null,
+    users: user.role === "admin" ? listUsers_(user) : null,
+    apiVersion: "v008",
     serverTime: new Date().toISOString(),
   };
+}
+
+
+function listUsers_(user) {
+  requireAdmin_(user);
+  const sheet = getSpreadsheet_().getSheetByName(CF.SHEETS.USERS);
+  if (!sheet || sheet.getLastRow() <= 1) return [];
+  return sheet.getRange(2, 1, sheet.getLastRow() - 1, 6).getValues().map(row => ({
+    loginId: String(row[0] || ""),
+    name: String(row[1] || ""),
+    role: String(row[2] || "staff"),
+    active: row[4] === true || String(row[4]).toLowerCase() === "true",
+    updatedAt: String(row[5] || ""),
+  })).filter(account => account.loginId);
+}
+
+function upsertUserAccount_(user, payload) {
+  requireAdmin_(user);
+  const loginId = String(payload.loginId || "").trim();
+  const name = String(payload.name || "").trim();
+  const role = String(payload.role || "staff");
+  const pin = String(payload.pin || "");
+  const active = payload.active !== false;
+
+  if (!/^[A-Za-z0-9._-]{3,40}$/.test(loginId)) throw new Error("ログインIDは半角英数字・記号（._-）で3〜40文字にしてください");
+  if (!name) throw new Error("表示名を入力してください");
+  if (!["admin", "staff"].includes(role)) throw new Error("権限が正しくありません");
+  if (pin && !/^\d{4,12}$/.test(pin)) throw new Error("PINは4〜12桁の数字にしてください");
+  if (loginId === user.loginId && (!active || role !== "admin")) throw new Error("現在ログイン中の管理者アカウントは無効化・権限変更できません");
+
+  const sheet = getSpreadsheet_().getSheetByName(CF.SHEETS.USERS);
+  const rows = sheet.getLastRow() > 1 ? sheet.getRange(2, 1, sheet.getLastRow() - 1, 6).getValues() : [];
+  const index = rows.findIndex(row => String(row[0]).trim() === loginId);
+  const existingHash = index >= 0 ? String(rows[index][3] || "") : "";
+  if (index < 0 && !pin) throw new Error("新しいアカウントにはPINが必要です");
+  const pinHash = pin ? hash_(pin) : existingHash;
+  if (!pinHash) throw new Error("PINを設定してください");
+  const record = [loginId, name, role, pinHash, active, new Date().toISOString()];
+  if (index >= 0) sheet.getRange(index + 2, 1, 1, 6).setValues([record]);
+  else sheet.appendRow(record);
+  SpreadsheetApp.flush();
+  return { loginId, name, role, active, updatedAt: record[5] };
+}
+
+function changePin_(user, payload) {
+  const currentPin = String(payload.currentPin || "");
+  const newPin = String(payload.newPin || "");
+  if (!currentPin || user.pinHash !== hash_(currentPin)) throw new Error("現在のPINが正しくありません");
+  if (!/^\d{4,12}$/.test(newPin)) throw new Error("新しいPINは4〜12桁の数字にしてください");
+  if (currentPin === newPin) throw new Error("現在とは異なるPINを設定してください");
+
+  const sheet = getSpreadsheet_().getSheetByName(CF.SHEETS.USERS);
+  const rows = sheet.getLastRow() > 1 ? sheet.getRange(2, 1, sheet.getLastRow() - 1, 6).getValues() : [];
+  const index = rows.findIndex(row => String(row[0]).trim() === user.loginId);
+  if (index < 0) throw new Error("アカウントが見つかりません");
+  sheet.getRange(index + 2, 4).setValue(hash_(newPin));
+  sheet.getRange(index + 2, 6).setValue(new Date().toISOString());
+  SpreadsheetApp.flush();
+  return { changed: true };
 }
 
 function upsertJobs_(user, incoming) {
