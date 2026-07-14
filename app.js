@@ -2,7 +2,9 @@
   "use strict";
 
   const TODAY = "2026-07-14";
-  const STORAGE_KEY = "cleanflow-v001-jobs";
+  const STORAGE_KEY = "cleanflow-v003-jobs";
+  const OLD_STORAGE_KEY = "cleanflow-v001-jobs";
+  const SETTINGS_KEY = "cleanflow-v003-invoice-settings";
   const state = {
     mode: "admin",
     view: "dashboard",
@@ -12,6 +14,39 @@
     manualFromJob: false,
     weekOffset: 0,
     billingMonth: "2026-07",
+  };
+
+  // 初期版では単価設定をコード内の簡易マスタとして保持。
+  // 実運用時は管理画面から編集できるクラウドデータへ移行する。
+  const priceMaster = {
+    "A管理会社": {
+      vacant: { billing: 24000, pay: 14000 },
+      kitchen: { billing: 15000, pay: 8500 },
+      bath: { billing: 12000, pay: 7000 },
+      aircon: { billing: 8000, pay: 5000 },
+      washbasin: { billing: 5000, pay: 3000 },
+      toilet: { billing: 5000, pay: 3000 },
+    },
+    "B不動産": {
+      vacant: { billing: 25000, pay: 14500 },
+      kitchen: { billing: 14500, pay: 8000 },
+      bath: { billing: 12000, pay: 7000 },
+      aircon: { billing: 8500, pay: 5000 },
+      washbasin: { billing: 5200, pay: 3000 },
+      toilet: { billing: 5200, pay: 3000 },
+    },
+    "その他": {},
+  };
+
+  const defaultInvoiceSettings = {
+    issuerName: "〇〇ハウスクリーニング",
+    issuerAddress: "大阪府〇〇市〇〇町0-0-0",
+    issuerPhone: "",
+    registrationNumber: "",
+    bankInfo: "〇〇銀行 〇〇支店　普通 0000000　口座名義：〇〇",
+    paymentTerms: "翌月末までにお振込みください。",
+    invoicePrefix: "CF",
+    note: "振込手数料はご負担をお願いいたします。",
   };
 
   const manuals = [
@@ -131,14 +166,32 @@
   };
 
   let jobs = loadJobs();
+  let invoiceSettings = loadInvoiceSettings();
 
   function loadJobs() {
     try {
-      const stored = JSON.parse(localStorage.getItem(STORAGE_KEY));
+      const current = localStorage.getItem(STORAGE_KEY);
+      const legacy = localStorage.getItem(OLD_STORAGE_KEY);
+      const stored = JSON.parse(current || legacy || "null");
       return Array.isArray(stored) ? stored : structuredClone(initialJobs);
     } catch { return structuredClone(initialJobs); }
   }
   function saveJobs() { localStorage.setItem(STORAGE_KEY, JSON.stringify(jobs)); }
+  function loadInvoiceSettings() {
+    try {
+      const stored = JSON.parse(localStorage.getItem(SETTINGS_KEY));
+      return stored && typeof stored === "object" ? { ...defaultInvoiceSettings, ...stored } : { ...defaultInvoiceSettings };
+    } catch { return { ...defaultInvoiceSettings }; }
+  }
+  function saveInvoiceSettings() { localStorage.setItem(SETTINGS_KEY, JSON.stringify(invoiceSettings)); }
+  function suggestedAmounts(client, tasks) {
+    return (tasks || []).reduce((sum, taskId) => {
+      const rate = priceMaster[client]?.[taskId] || { billing: 0, pay: 0 };
+      sum.billing += Number(rate.billing) || 0;
+      sum.pay += Number(rate.pay) || 0;
+      return sum;
+    }, { billing: 0, pay: 0 });
+  }
   function esc(value) { return String(value ?? "").replace(/[&<>'"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"}[c])); }
   function yen(value) { return new Intl.NumberFormat("ja-JP", { style:"currency", currency:"JPY", maximumFractionDigits:0 }).format(Number(value)||0); }
   function jpDate(dateStr, includeYear=false) {
@@ -316,19 +369,30 @@
     const monthJobs = jobs.filter(j=>monthOf(j.date)===state.billingMonth && ["done","billing","billed"].includes(j.status));
     const clients = groupBy(monthJobs, "client");
     const workers = groupBy(monthJobs.filter(j=>j.worker!=="未設定"), "worker");
+    const pendingCount = monthJobs.filter(j=>j.status!=="billed").length;
+    const billedCount = monthJobs.filter(j=>j.status==="billed").length;
     return `
-      <div class="toolbar"><div class="toolbar-group"><label for="billingMonth"><strong>対象月</strong></label><input id="billingMonth" class="form-control" type="month" value="${state.billingMonth}" /></div><button class="ghost-btn" id="resetDemo">デモデータを初期化</button></div>
+      <div class="toolbar">
+        <div class="toolbar-group"><label for="billingMonth"><strong>対象月</strong></label><input id="billingMonth" class="form-control" type="month" value="${state.billingMonth}" /></div>
+        <div class="toolbar-group"><button class="ghost-btn" id="invoiceSettingsBtn">請求書設定</button><button class="ghost-btn" id="resetDemo">デモデータを初期化</button></div>
+      </div>
+      <div class="billing-status-strip"><span><b>${pendingCount}件</b> 請求前</span><span><b>${billedCount}件</b> 請求済み</span><small>完了した案件だけが自動で集計されます</small></div>
       <div class="billing-summary">
         <section class="panel"><div class="panel-header"><h2>元請けへの請求</h2></div><div class="panel-body billing-list">
-          ${Object.keys(clients).length ? Object.entries(clients).map(([name,list])=>billingRow(name,list.length,list.reduce((s,j)=>s+j.billing+j.expense,0),"client")).join("") : '<div class="empty-state"><b>対象案件がありません</b></div>'}
+          ${Object.keys(clients).length ? Object.entries(clients).map(([name,list])=>billingRow(name,list,"client")).join("") : '<div class="empty-state"><b>対象案件がありません</b></div>'}
         </div></section>
-        <section class="panel"><div class="panel-header"><h2>担当者への支払</h2></div><div class="panel-body billing-list">
-          ${Object.keys(workers).length ? Object.entries(workers).map(([name,list])=>billingRow(name,list.length,list.reduce((s,j)=>s+j.pay,0),"worker")).join("") : '<div class="empty-state"><b>対象案件がありません</b></div>'}
+        <section class="panel"><div class="panel-header"><h2>担当者への支払予定</h2></div><div class="panel-body billing-list">
+          ${Object.keys(workers).length ? Object.entries(workers).map(([name,list])=>billingRow(name,list,"worker")).join("") : '<div class="empty-state"><b>対象案件がありません</b></div>'}
         </div></section>
       </div>`;
   }
   function groupBy(list,key) { return list.reduce((acc,item)=>{ (acc[item[key]] ||= []).push(item); return acc; },{}); }
-  function billingRow(name,count,amount,type) { return `<div class="billing-row"><div><strong>${esc(name)}</strong><br><small>${count}件</small></div><span class="billing-amount">${yen(amount)}</span><button class="secondary-btn" data-billing-detail="${type}|${esc(name)}">確認</button></div>`; }
+  function billingRow(name,list,type) {
+    const isClient = type === "client";
+    const total = list.reduce((s,j)=>s+(isClient?j.billing+j.expense:j.pay),0);
+    const pending = list.filter(j=>j.status!=="billed").length;
+    return `<div class="billing-row"><div><strong>${esc(name)}</strong><br><small>${list.length}件${isClient ? `・未請求 ${pending}件` : ""}</small></div><span class="billing-amount">${yen(total)}</span><button class="secondary-btn" data-billing-detail="${type}|${esc(name)}">${isClient?"請求確認":"明細確認"}</button></div>`;
+  }
 
   function renderManuals() {
     return `<div class="manual-grid">${manuals.map(m=>`<article class="manual-card"><div class="manual-icon">${esc(m.icon)}</div><h3>${esc(m.name)}</h3><p>${esc(m.summary)}</p><div class="manual-actions"><button class="secondary-btn" data-manual-id="${m.id}">要点を見る</button><a class="ghost-btn" href="${encodeURI(m.file)}" target="_blank" rel="noopener" style="text-decoration:none">PDF</a></div></article>`).join("")}</div>`;
@@ -408,6 +472,7 @@
     const filterRows=()=>document.querySelectorAll("#jobTableBody tr").forEach(row=>{const q=(jobSearch?.value||"").toLowerCase();const st=statusFilter?.value||"all";row.hidden=!(row.dataset.search.includes(q)&&(st==="all"||row.dataset.status===st));});
     jobSearch?.addEventListener("input",filterRows); statusFilter?.addEventListener("change",filterRows);
     document.getElementById("billingMonth")?.addEventListener("change",e=>{state.billingMonth=e.target.value;render();});
+    document.getElementById("invoiceSettingsBtn")?.addEventListener("click",openInvoiceSettings);
     document.getElementById("resetDemo")?.addEventListener("click",()=>{localStorage.removeItem(STORAGE_KEY);jobs=structuredClone(initialJobs);render();showToast("デモデータを初期化しました");});
 
     el.content.querySelectorAll("[data-edit-job]").forEach(b=>b.addEventListener("click",()=>openJobModal(jobs.find(j=>j.id===b.dataset.editJob))));
@@ -445,30 +510,110 @@
 
   function openJobModal(job=null) {
     const edit=Boolean(job); const today=TODAY;
-    el.modal.innerHTML=`<form id="jobForm"><div class="modal-header"><h2 id="modalTitle">${edit?"案件を編集":"新しい案件"}</h2><button class="close-btn" type="button" data-close>×</button></div><div class="modal-body"><div class="form-grid">
-      <div class="form-group"><label>元請け *</label><select name="client" class="form-control" required><option value="">選択してください</option>${["A管理会社","B不動産","その他"].map(x=>`<option ${job?.client===x?"selected":""}>${x}</option>`).join("")}</select></div>
-      <div class="form-group"><label>担当者 *</label><select name="worker" class="form-control" required>${["未設定","山田","佐藤"].map(x=>`<option ${job?.worker===x?"selected":""}>${x}</option>`).join("")}</select></div>
-      <div class="form-group"><label>作業日 *</label><input name="date" type="date" class="form-control" value="${job?.date||today}" required></div>
-      <div class="form-group"><label>時間 *</label><div style="display:flex;gap:8px"><input name="start" type="time" class="form-control" value="${job?.start||"09:00"}" required><input name="end" type="time" class="form-control" value="${job?.end||""}"></div></div>
-      <div class="form-group full"><label>現場名 *</label><input name="site" class="form-control" value="${esc(job?.site||"")}" placeholder="例：〇〇マンション 203号室" required></div>
-      <div class="form-group full"><label>住所 *</label><input name="address" class="form-control" value="${esc(job?.address||"")}" required></div>
-      <div class="form-group"><label>電話番号</label><input name="phone" class="form-control" value="${esc(job?.phone||"")}"></div>
-      <div class="form-group"><label>元請け請求予定額</label><input name="billing" type="number" min="0" class="form-control" value="${job?.billing||0}"></div>
-      <div class="form-group full"><label>作業内容 *</label><div class="checkbox-grid">${manuals.map(m=>`<label class="checkbox-card"><input type="checkbox" name="tasks" value="${m.id}" ${job?.tasks.includes(m.id)?"checked":""}><span>${esc(m.name)}</span></label>`).join("")}</div></div>
-      <div class="form-group"><label>担当者支払予定額</label><input name="pay" type="number" min="0" class="form-control" value="${job?.pay||0}"></div>
-      <div class="form-group"><label>経費</label><input name="expense" type="number" min="0" class="form-control" value="${job?.expense||0}"></div>
-      <div class="form-group full"><label>注意事項</label><textarea name="note" class="form-control">${esc(job?.note||"")}</textarea></div>
-      </div></div><div class="modal-footer"><button type="button" class="ghost-btn" data-close>キャンセル</button><button class="primary-btn" type="submit">${edit?"保存":"案件を登録"}</button></div></form>`;
+    el.modal.innerHTML=`<form id="jobForm"><div class="modal-header"><h2 id="modalTitle">${edit?"案件を編集":"新しい案件"}</h2><button class="close-btn" type="button" data-close>×</button></div><div class="modal-body">
+      <div class="form-section-title">基本情報</div>
+      <div class="form-grid">
+        <div class="form-group"><label>元請け *</label><select id="jobClient" name="client" class="form-control" required><option value="">選択してください</option>${["A管理会社","B不動産","その他"].map(x=>`<option ${job?.client===x?"selected":""}>${x}</option>`).join("")}</select></div>
+        <div class="form-group"><label>担当者 *</label><select name="worker" class="form-control" required>${["未設定","山田","佐藤"].map(x=>`<option ${job?.worker===x?"selected":""}>${x}</option>`).join("")}</select></div>
+        <div class="form-group"><label>作業日 *</label><input name="date" type="date" class="form-control" value="${job?.date||today}" required></div>
+        <div class="form-group"><label>時間 *</label><div style="display:flex;gap:8px"><input name="start" type="time" class="form-control" value="${job?.start||"09:00"}" required><input name="end" type="time" class="form-control" value="${job?.end||""}"></div></div>
+        <div class="form-group full"><label>現場名 *</label><input name="site" class="form-control" value="${esc(job?.site||"")}" placeholder="例：〇〇マンション 203号室" required></div>
+        <div class="form-group full"><label>住所 *</label><input name="address" class="form-control" value="${esc(job?.address||"")}" required></div>
+        <div class="form-group full"><label>作業内容 *</label><div class="checkbox-grid" id="taskChecks">${manuals.map(m=>`<label class="checkbox-card"><input type="checkbox" name="tasks" value="${m.id}" ${job?.tasks.includes(m.id)?"checked":""}><span>${esc(m.name)}</span></label>`).join("")}</div></div>
+        <div class="form-group full"><label>現場の注意事項</label><textarea name="note" class="form-control" placeholder="鍵・駐車場・破損箇所など、現場で必要な情報だけ入力">${esc(job?.note||"")}</textarea></div>
+      </div>
+      <details class="form-details" ${edit?"open":""}>
+        <summary>金額・連絡先などを入力</summary>
+        <div class="form-grid details-inner">
+          <div class="form-group"><label>電話番号</label><input name="phone" class="form-control" value="${esc(job?.phone||"")}"></div>
+          <div class="price-hint" id="priceHint">元請けと作業内容を選ぶと単価を自動入力します。</div>
+          <div class="form-group"><label>元請け請求予定額</label><input id="billingInput" name="billing" type="number" min="0" class="form-control" value="${job?.billing||0}"></div>
+          <div class="form-group"><label>担当者支払予定額</label><input id="payInput" name="pay" type="number" min="0" class="form-control" value="${job?.pay||0}"></div>
+          <div class="form-group"><label>経費</label><input name="expense" type="number" min="0" class="form-control" value="${job?.expense||0}"></div>
+        </div>
+      </details>
+      </div><div class="modal-footer"><button type="button" class="ghost-btn" data-close>キャンセル</button><button class="primary-btn" type="submit">${edit?"保存":"案件を登録"}</button></div></form>`;
     openModal();
     el.modal.querySelectorAll("[data-close]").forEach(b=>b.addEventListener("click",closeModal));
-    document.getElementById("jobForm").addEventListener("submit",e=>{e.preventDefault();const fd=new FormData(e.currentTarget);const tasks=fd.getAll("tasks");if(!tasks.length){showToast("作業内容を1つ以上選択してください");return;}const payload={id:job?.id||`J${Date.now()}`,date:fd.get("date"),start:fd.get("start"),end:fd.get("end"),client:fd.get("client"),site:fd.get("site"),address:fd.get("address"),phone:fd.get("phone"),worker:fd.get("worker"),tasks,status:job?.status||"planned",note:fd.get("note"),billing:Number(fd.get("billing"))||0,pay:Number(fd.get("pay"))||0,expense:Number(fd.get("expense"))||0,issue:job?.issue||false,photos:job?.photos||{before:[],after:[]}};if(edit)jobs=jobs.map(j=>j.id===job.id?payload:j);else jobs.push(payload);saveJobs();closeModal();state.view="jobs";render();showToast(edit?"案件を更新しました":"案件を登録しました");});
+    const form=document.getElementById("jobForm");
+    const clientSelect=document.getElementById("jobClient");
+    const billingInput=document.getElementById("billingInput");
+    const payInput=document.getElementById("payInput");
+    const priceHint=document.getElementById("priceHint");
+    const recalc=()=>{
+      const selectedTasks=[...form.querySelectorAll('input[name="tasks"]:checked')].map(x=>x.value);
+      const suggested=suggestedAmounts(clientSelect.value, selectedTasks);
+      billingInput.value=suggested.billing;
+      payInput.value=suggested.pay;
+      priceHint.innerHTML=selectedTasks.length && clientSelect.value
+        ? `登録単価から <b>請求 ${yen(suggested.billing)}</b>・<b>支払 ${yen(suggested.pay)}</b> を入力しました。必要な場合だけ変更してください。`
+        : "元請けと作業内容を選ぶと単価を自動入力します。";
+    };
+    if(!edit) recalc();
+    clientSelect.addEventListener("change",recalc);
+    form.querySelectorAll('input[name="tasks"]').forEach(x=>x.addEventListener("change",recalc));
+    form.addEventListener("submit",e=>{e.preventDefault();const fd=new FormData(e.currentTarget);const tasks=fd.getAll("tasks");if(!tasks.length){showToast("作業内容を1つ以上選択してください");return;}const payload={id:job?.id||`J${Date.now()}`,date:fd.get("date"),start:fd.get("start"),end:fd.get("end"),client:fd.get("client"),site:fd.get("site"),address:fd.get("address"),phone:fd.get("phone"),worker:fd.get("worker"),tasks,status:job?.status||"planned",note:fd.get("note"),billing:Number(fd.get("billing"))||0,pay:Number(fd.get("pay"))||0,expense:Number(fd.get("expense"))||0,issue:job?.issue||false,issueText:job?.issueText||"",photos:job?.photos||{before:[],after:[]}};if(edit)jobs=jobs.map(j=>j.id===job.id?payload:j);else jobs.push(payload);saveJobs();closeModal();state.view="jobs";render();showToast(edit?"案件を更新しました":"案件を登録しました");});
   }
 
   function openBillingDetail(type,name) {
-    const list=jobs.filter(j=>monthOf(j.date)===state.billingMonth && ["done","billing","billed"].includes(j.status) && j[type]===name);
+    const list=jobs.filter(j=>monthOf(j.date)===state.billingMonth && ["done","billing","billed"].includes(j.status) && j[type]===name)
+      .sort((a,b)=>a.date.localeCompare(b.date));
     const isClient=type==="client";
-    el.modal.innerHTML=`<div class="modal-header"><h2 id="modalTitle">${esc(name)}・${state.billingMonth.replace("-","年")}月分</h2><button class="close-btn" data-close>×</button></div><div class="modal-body"><div class="table-card" style="box-shadow:none"><table style="min-width:620px"><thead><tr><th>作業日</th><th>現場</th><th>作業内容</th><th>金額</th></tr></thead><tbody>${list.map(j=>`<tr><td>${jpDate(j.date)}</td><td>${esc(j.site)}</td><td>${esc(taskNames(j))}</td><td>${yen(isClient?j.billing+j.expense:j.pay)}</td></tr>`).join("")}</tbody></table></div><div class="money-box" style="margin-top:16px"><small>合計</small><strong>${yen(list.reduce((s,j)=>s+(isClient?j.billing+j.expense:j.pay),0))}</strong></div></div><div class="modal-footer"><button class="ghost-btn" data-close>閉じる</button>${isClient?'<button class="primary-btn" id="createInvoiceDemo">請求書PDF作成（次段階）</button>':""}</div>`;
-    openModal();el.modal.querySelectorAll("[data-close]").forEach(b=>b.addEventListener("click",closeModal));document.getElementById("createInvoiceDemo")?.addEventListener("click",()=>showToast("PDF発行機能は次段階で接続します"));
+    if (!isClient) {
+      el.modal.innerHTML=`<div class="modal-header"><h2 id="modalTitle">${esc(name)}・${state.billingMonth.replace("-","年")}月分</h2><button class="close-btn" data-close>×</button></div><div class="modal-body"><div class="table-card" style="box-shadow:none"><table style="min-width:620px"><thead><tr><th>作業日</th><th>現場</th><th>作業内容</th><th>支払予定</th></tr></thead><tbody>${list.map(j=>`<tr><td>${jpDate(j.date)}</td><td>${esc(j.site)}</td><td>${esc(taskNames(j))}</td><td>${yen(j.pay)}</td></tr>`).join("")}</tbody></table></div><div class="money-box" style="margin-top:16px"><small>合計</small><strong>${yen(list.reduce((s,j)=>s+j.pay,0))}</strong></div></div><div class="modal-footer"><button class="ghost-btn" data-close>閉じる</button></div>`;
+      openModal();el.modal.querySelectorAll("[data-close]").forEach(b=>b.addEventListener("click",closeModal));return;
+    }
+
+    const pending=list.filter(j=>j.status!=="billed");
+    el.modal.innerHTML=`<div class="modal-header"><h2 id="modalTitle">${esc(name)}・${state.billingMonth.replace("-","年")}月分</h2><button class="close-btn" data-close>×</button></div>
+      <div class="modal-body">
+        <p class="modal-lead">請求書に含める案件だけを選択してください。請求済みの案件は再選択できません。</p>
+        <div class="invoice-job-list">
+          ${list.map(j=>`<label class="invoice-job ${j.status==="billed"?"is-billed":""}"><input type="checkbox" name="invoiceJob" value="${j.id}" ${j.status!=="billed"?"checked":"disabled"}><span class="invoice-job-main"><b>${jpDate(j.date)}　${esc(j.site)}</b><small>${esc(taskNames(j))}${j.expense?`・経費 ${yen(j.expense)}`:""}</small></span><strong>${yen(j.billing+j.expense)}</strong><em>${j.status==="billed"?"請求済み":"請求前"}</em></label>`).join("")}
+        </div>
+        <div class="invoice-total-preview"><small>選択中の合計</small><strong id="invoiceSelectedTotal">${yen(pending.reduce((s,j)=>s+j.billing+j.expense,0))}</strong></div>
+      </div>
+      <div class="modal-footer"><button class="ghost-btn" data-close>閉じる</button><button class="secondary-btn" id="invoicePreviewBtn" ${pending.length?"":"disabled"}>請求書プレビュー</button><button class="primary-btn" id="markBilledBtn" ${pending.length?"":"disabled"}>選択案件を請求済みにする</button></div>`;
+    openModal();
+    el.modal.querySelectorAll("[data-close]").forEach(b=>b.addEventListener("click",closeModal));
+    const selectedJobs=()=>[...el.modal.querySelectorAll('input[name="invoiceJob"]:checked')].map(x=>jobs.find(j=>j.id===x.value)).filter(Boolean);
+    const updateTotal=()=>{document.getElementById("invoiceSelectedTotal").textContent=yen(selectedJobs().reduce((s,j)=>s+j.billing+j.expense,0));};
+    el.modal.querySelectorAll('input[name="invoiceJob"]').forEach(x=>x.addEventListener("change",updateTotal));
+    document.getElementById("invoicePreviewBtn")?.addEventListener("click",()=>{
+      const selected=selectedJobs(); if(!selected.length){showToast("請求対象の案件を選択してください");return;} openInvoicePreview(name,selected);
+    });
+    document.getElementById("markBilledBtn")?.addEventListener("click",()=>{
+      const selected=selectedJobs(); if(!selected.length){showToast("請求対象の案件を選択してください");return;}
+      const ids=new Set(selected.map(j=>j.id)); jobs=jobs.map(j=>ids.has(j.id)?{...j,status:"billed"}:j); saveJobs(); closeModal(); render(); showToast(`${selected.length}件を請求済みにしました`);
+    });
+  }
+
+  function openInvoiceSettings() {
+    el.modal.innerHTML=`<form id="invoiceSettingsForm"><div class="modal-header"><h2 id="modalTitle">請求書設定</h2><button class="close-btn" type="button" data-close>×</button></div><div class="modal-body"><p class="modal-lead">請求書に表示する発行者情報を登録します。このデモではブラウザ内だけに保存されます。</p><div class="form-grid">
+      <div class="form-group full"><label>発行者名</label><input name="issuerName" class="form-control" value="${esc(invoiceSettings.issuerName)}" required></div>
+      <div class="form-group full"><label>住所</label><input name="issuerAddress" class="form-control" value="${esc(invoiceSettings.issuerAddress)}"></div>
+      <div class="form-group"><label>電話番号</label><input name="issuerPhone" class="form-control" value="${esc(invoiceSettings.issuerPhone)}"></div>
+      <div class="form-group"><label>登録番号（任意）</label><input name="registrationNumber" class="form-control" value="${esc(invoiceSettings.registrationNumber)}"></div>
+      <div class="form-group full"><label>振込先</label><textarea name="bankInfo" class="form-control">${esc(invoiceSettings.bankInfo)}</textarea></div>
+      <div class="form-group full"><label>支払条件</label><input name="paymentTerms" class="form-control" value="${esc(invoiceSettings.paymentTerms)}"></div>
+      <div class="form-group"><label>請求番号の接頭辞</label><input name="invoicePrefix" class="form-control" value="${esc(invoiceSettings.invoicePrefix)}"></div>
+      <div class="form-group full"><label>備考</label><input name="note" class="form-control" value="${esc(invoiceSettings.note)}"></div>
+      </div></div><div class="modal-footer"><button type="button" class="ghost-btn" data-close>キャンセル</button><button class="primary-btn" type="submit">保存</button></div></form>`;
+    openModal(); el.modal.querySelectorAll("[data-close]").forEach(b=>b.addEventListener("click",closeModal));
+    document.getElementById("invoiceSettingsForm").addEventListener("submit",e=>{e.preventDefault();const fd=new FormData(e.currentTarget);invoiceSettings={...invoiceSettings,...Object.fromEntries(fd.entries())};saveInvoiceSettings();closeModal();showToast("請求書設定を保存しました");});
+  }
+
+  function openInvoicePreview(clientName, selectedJobs) {
+    const total=selectedJobs.reduce((s,j)=>s+j.billing+j.expense,0);
+    const issueDate=new Date().toLocaleDateString("ja-JP");
+    const number=`${invoiceSettings.invoicePrefix || "CF"}-${state.billingMonth.replace("-","")}-${String(Date.now()).slice(-4)}`;
+    const rows=selectedJobs.map(j=>`<tr><td>${esc(j.date.replaceAll("-","/"))}</td><td>${esc(j.site)}</td><td>${esc(taskNames(j))}${j.expense?`<br><small>経費含む ${yen(j.expense)}</small>`:""}</td><td class="num">${yen(j.billing+j.expense)}</td></tr>`).join("");
+    const win=window.open("","_blank");
+    if(!win){showToast("ポップアップがブロックされました");return;}
+    win.document.write(`<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>請求書 ${esc(number)}</title><style>
+      body{font-family:-apple-system,BlinkMacSystemFont,"Yu Gothic",sans-serif;color:#1f2933;margin:0;background:#eef2f5}.page{width:210mm;min-height:297mm;margin:18px auto;padding:18mm;background:#fff;box-sizing:border-box}.actions{position:fixed;right:20px;top:20px}.actions button{border:0;border-radius:8px;background:#1f5f7a;color:#fff;padding:11px 18px;font-weight:700;cursor:pointer}h1{font-size:30px;letter-spacing:.25em;text-align:center;margin:0 0 35px}.top{display:grid;grid-template-columns:1fr 1fr;gap:30px}.to{font-size:20px;font-weight:700;border-bottom:1px solid #333;padding:10px 0}.meta{text-align:right;font-size:13px;line-height:1.8}.issuer{margin-top:18px;text-align:right;line-height:1.65}.amount{margin:32px 0 22px;padding:16px 18px;background:#edf5f8;border-left:5px solid #1f5f7a;display:flex;justify-content:space-between;align-items:center}.amount strong{font-size:28px}table{width:100%;border-collapse:collapse}th,td{border:1px solid #b9c4cc;padding:10px;font-size:12px}th{background:#eef2f5}.num{text-align:right;white-space:nowrap}.summary{margin-left:auto;width:45%;margin-top:12px}.summary div{display:flex;justify-content:space-between;padding:9px;border-bottom:1px solid #cbd5dc}.summary .total{font-size:18px;font-weight:700;border-bottom:2px solid #333}.bank,.notes{margin-top:28px;border:1px solid #cbd5dc;padding:14px;line-height:1.7;font-size:12px}.bank b,.notes b{display:block;margin-bottom:5px}small{color:#64727c}@media print{body{background:#fff}.page{margin:0;width:auto;min-height:auto}.actions{display:none}} 
+    </style></head><body><div class="actions"><button onclick="window.print()">印刷・PDF保存</button></div><main class="page"><h1>請 求 書</h1><div class="top"><div><div class="to">${esc(clientName)} 御中</div><p>${esc(state.billingMonth.replace("-","年"))}月分 清掃作業費として</p></div><div class="meta">発行日：${esc(issueDate)}<br>請求番号：${esc(number)}<div class="issuer"><b>${esc(invoiceSettings.issuerName)}</b><br>${esc(invoiceSettings.issuerAddress)}${invoiceSettings.issuerPhone?`<br>TEL ${esc(invoiceSettings.issuerPhone)}`:""}${invoiceSettings.registrationNumber?`<br>登録番号 ${esc(invoiceSettings.registrationNumber)}`:""}</div></div></div><div class="amount"><span>ご請求金額</span><strong>${yen(total)}</strong></div><table><thead><tr><th style="width:18%">作業日</th><th style="width:33%">現場</th><th>作業内容</th><th style="width:18%">金額</th></tr></thead><tbody>${rows}</tbody></table><div class="summary"><div class="total"><span>合計</span><span>${yen(total)}</span></div></div><div class="bank"><b>お振込先</b>${esc(invoiceSettings.bankInfo).replaceAll("\n","<br>")}</div><div class="notes"><b>お支払条件・備考</b>${esc(invoiceSettings.paymentTerms)}<br>${esc(invoiceSettings.note)}</div></main></body></html>`);
+    win.document.close();
   }
 
   function openModal(){el.modalBackdrop.hidden=false;document.body.style.overflow="hidden";}
