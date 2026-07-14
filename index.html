@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#1f5f7a" />
+  <title>CleanFlow v001</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="app" class="app-shell">
+    <aside class="sidebar" aria-label="管理メニュー">
+      <div class="brand">
+        <div class="brand-mark">CF</div>
+        <div>
+          <strong>CleanFlow</strong>
+          <small>清掃業務管理</small>
+        </div>
+      </div>
+
+      <nav id="adminNav" class="nav-list">
+        <button class="nav-item active" data-view="dashboard"><span>⌂</span>ホーム</button>
+        <button class="nav-item" data-view="calendar"><span>▦</span>カレンダー</button>
+        <button class="nav-item" data-view="jobs"><span>▤</span>案件</button>
+        <button class="nav-item" data-view="billing"><span>¥</span>請求・支払</button>
+        <button class="nav-item" data-view="manuals"><span>▧</span>手順書</button>
+      </nav>
+
+      <div class="sidebar-bottom">
+        <button id="modeSwitch" class="mode-switch" type="button">
+          <span class="mode-icon">▣</span>
+          <span><b>スタッフ画面へ</b><small>表示を切り替え</small></span>
+        </button>
+      </div>
+    </aside>
+
+    <main class="main-area">
+      <header class="topbar">
+        <button id="mobileMenuBtn" class="icon-btn mobile-only" aria-label="メニューを開く">☰</button>
+        <div class="topbar-title">
+          <h1 id="pageTitle">ホーム</h1>
+          <p id="pageSubtitle">今日の状況と対応事項を確認します</p>
+        </div>
+        <div class="topbar-actions">
+          <span id="todayLabel" class="date-label"></span>
+          <button id="addJobTop" class="primary-btn">＋ 案件追加</button>
+        </div>
+      </header>
+
+      <section id="content" class="content" aria-live="polite"></section>
+    </main>
+  </div>
+
+  <div id="mobileOverlay" class="mobile-overlay"></div>
+  <div id="toast" class="toast" role="status"></div>
+
+  <div id="modalBackdrop" class="modal-backdrop" hidden>
+    <section id="modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle"></section>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
