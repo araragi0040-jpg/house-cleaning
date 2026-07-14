@@ -572,7 +572,7 @@ button:disabled { opacity: .45; cursor: not-allowed; }
   .settings-save-row .primary-btn, .settings-inline .secondary-btn { width: 100%; }
 }
 
-/* v006: login and cloud sync */
+/* v007: login and cloud sync */
 .login-screen {
   min-height: 100vh;
   display: grid;
@@ -605,13 +605,15 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 .demo-login-help b { margin-bottom:2px; }
 .login-mode-label { margin:14px 0 0; color:var(--muted); text-align:center; font-size:11px; }
 
-.sync-status { display:inline-flex; align-items:center; gap:7px; min-height:32px; padding:6px 10px; border-radius:999px; color:#52616c; background:#eef2f4; font-size:11px; font-weight:800; white-space:nowrap; }
+.sync-status { border:0; cursor:pointer; display:inline-flex; align-items:center; gap:7px; min-height:32px; padding:6px 10px; border-radius:999px; color:#52616c; background:#eef2f4; font-size:11px; font-weight:800; white-space:nowrap; }
 .sync-status i { width:8px; height:8px; border-radius:50%; background:#94a3ad; }
 .sync-status.syncing i { background:var(--warn); animation:cfPulse 1s infinite alternate; }
 .sync-status.synced { color:#23704a; background:#e9f6ef; }
 .sync-status.synced i { background:var(--ok); }
 .sync-status.error { color:var(--danger); background:#fff0f0; }
 .sync-status.error i { background:var(--danger); }
+.sync-status:hover { filter:brightness(.98); }
+.sync-status:disabled { cursor:wait; opacity:.75; }
 @keyframes cfPulse { from { opacity:.35; } to { opacity:1; } }
 .user-menu-button { display:flex; align-items:center; gap:8px; min-height:40px; padding:5px 10px 5px 5px; border:1px solid var(--line); border-radius:12px; color:var(--ink); background:#fff; }
 .user-menu-button span { width:30px; height:30px; border-radius:9px; display:grid; place-items:center; color:#fff; background:var(--brand); font-size:12px; font-weight:900; }
@@ -628,7 +630,7 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 @media (max-width: 560px) {
   .login-card { padding:24px 20px; border-radius:20px; }
   .topbar-actions { gap:6px; }
-  .staff-mode .sync-status { display:inline-flex; }
+  .staff-mode .sync-status { border:0; cursor:pointer; display:inline-flex; }
   .staff-mode .user-menu-button { display:flex; }
 }
 

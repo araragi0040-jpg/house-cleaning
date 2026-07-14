@@ -4,17 +4,23 @@
   const CONFIG = window.CLEANFLOW_CONFIG || {};
   const API = window.CleanFlowAPI;
   const TODAY = localDateISO(new Date());
-  const STORAGE_KEY = "cleanflow-v006-jobs";
-  const LEGACY_STORAGE_KEYS = ["cleanflow-v005-jobs", "cleanflow-v004-jobs", "cleanflow-v003-jobs", "cleanflow-v001-jobs"];
-  const SETTINGS_KEY = "cleanflow-v006-invoice-settings";
-  const LEGACY_SETTINGS_KEYS = ["cleanflow-v005-invoice-settings", "cleanflow-v004-invoice-settings", "cleanflow-v003-invoice-settings"];
-  const STAFF_KEY = "cleanflow-v006-current-staff";
-  const MASTER_KEY = "cleanflow-v006-master";
-  const SESSION_KEY = "cleanflow-v006-session";
-  const LEGACY_STAFF_KEY = "cleanflow-v005-current-staff";
+  const STORAGE_KEY = "cleanflow-v007-jobs";
+  const LEGACY_STORAGE_KEYS = ["cleanflow-v006-jobs", "cleanflow-v005-jobs", "cleanflow-v004-jobs", "cleanflow-v003-jobs", "cleanflow-v001-jobs"];
+  const SETTINGS_KEY = "cleanflow-v007-invoice-settings";
+  const LEGACY_SETTINGS_KEYS = ["cleanflow-v006-invoice-settings", "cleanflow-v005-invoice-settings", "cleanflow-v004-invoice-settings", "cleanflow-v003-invoice-settings"];
+  const STAFF_KEY = "cleanflow-v007-current-staff";
+  const MASTER_KEY = "cleanflow-v007-master";
+  const SESSION_KEY = "cleanflow-v007-session";
+  const LEGACY_STAFF_KEY = "cleanflow-v006-current-staff";
+  const PENDING_KEY_BASE = "cleanflow-v007-pending-sync";
   const cloudEnabled = Boolean(API?.isConfigured?.());
+  const cloudOnly = Boolean(CONFIG.cloudOnly);
   let session = loadSession();
   let syncTimer = null;
+  let syncInFlight = null;
+  let refreshTimer = null;
+  let lastCloudPullAt = 0;
+  let pendingSync = loadPendingSync();
   let lastJobFingerprints = new Map();
   const state = {
     mode: "admin",
@@ -24,7 +30,7 @@
     selectedManualId: null,
     manualFromJob: false,
     weekOffset: 0,
-    billingMonth: "2026-07",
+    billingMonth: TODAY.slice(0, 7),
     currentStaff: localStorage.getItem(STAFF_KEY) || localStorage.getItem(LEGACY_STAFF_KEY) || "山田",
     settingsClient: "A管理会社",
   };
@@ -233,7 +239,11 @@
     });
     localStorage.setItem(STORAGE_KEY, JSON.stringify(jobs));
     rememberJobFingerprints();
-    if (cloudEnabled && session?.token && changed.length) queueCloudSync(() => API.upsertJobs(session.token, changed));
+    if (cloudEnabled && session?.token && changed.length) {
+      changed.forEach(job => { pendingSync.jobs[job.id] = job; });
+      persistPendingSync();
+      scheduleCloudSync();
+    }
   }
   function loadInvoiceSettings() {
     try {
@@ -244,7 +254,11 @@
   }
   function saveInvoiceSettings() {
     localStorage.setItem(SETTINGS_KEY, JSON.stringify(invoiceSettings));
-    if (cloudEnabled && session?.token && session.user?.role === "admin") queueCloudSync(() => API.saveInvoiceSettings(session.token, invoiceSettings));
+    if (cloudEnabled && session?.token && session.user?.role === "admin") {
+      pendingSync.invoice = true;
+      persistPendingSync();
+      scheduleCloudSync();
+    }
   }
   function loadMasterData() {
     try {
@@ -259,7 +273,11 @@
   }
   function saveMasterData() {
     localStorage.setItem(MASTER_KEY, JSON.stringify(masterData));
-    if (cloudEnabled && session?.token && session.user?.role === "admin") queueCloudSync(() => API.saveMaster(session.token, masterData));
+    if (cloudEnabled && session?.token && session.user?.role === "admin") {
+      pendingSync.master = true;
+      persistPendingSync();
+      scheduleCloudSync();
+    }
   }
   function clientNames() { return masterData.clients; }
   function staffNames() { return masterData.staff; }
@@ -298,25 +316,75 @@
   function rememberJobFingerprints() {
     lastJobFingerprints = new Map(jobs.map(job => [job.id, jobFingerprint(job)]));
   }
+  function pendingStorageKey() {
+    return `${PENDING_KEY_BASE}-${session?.user?.loginId || "anonymous"}`;
+  }
+  function loadPendingSync() {
+    try {
+      const value = JSON.parse(localStorage.getItem(pendingStorageKey()) || "null");
+      return value && typeof value === "object"
+        ? { jobs: value.jobs && typeof value.jobs === "object" ? value.jobs : {}, master: Boolean(value.master), invoice: Boolean(value.invoice) }
+        : { jobs: {}, master: false, invoice: false };
+    } catch { return { jobs: {}, master: false, invoice: false }; }
+  }
+  function persistPendingSync() {
+    localStorage.setItem(pendingStorageKey(), JSON.stringify(pendingSync));
+  }
+  function hasPendingSync() {
+    return Object.keys(pendingSync.jobs).length > 0 || pendingSync.master || pendingSync.invoice;
+  }
   function setSyncStatus(type, label) {
     if (!el.syncStatus) return;
     el.syncStatus.className = `sync-status ${type || ""}`.trim();
+    el.syncStatus.disabled = type === "syncing";
     const text = el.syncStatus.querySelector("span");
     if (text) text.textContent = label;
   }
-  function queueCloudSync(task) {
+  function syncedLabel() {
+    return `同期済み ${new Date().toLocaleTimeString("ja-JP", { hour:"2-digit", minute:"2-digit" })}`;
+  }
+  function scheduleCloudSync() {
     clearTimeout(syncTimer);
-    setSyncStatus("syncing", "同期中");
-    syncTimer = setTimeout(async () => {
-      try {
-        await task();
-        setSyncStatus("synced", "同期済み");
-      } catch (error) {
-        console.error(error);
-        setSyncStatus("error", "同期エラー");
-        showToast(error.message || "クラウド同期に失敗しました");
+    setSyncStatus("syncing", "保存中");
+    syncTimer = setTimeout(() => flushPendingSync().catch(() => {}), 300);
+  }
+  async function flushPendingSync() {
+    if (!cloudEnabled || !session?.token || !hasPendingSync()) {
+      if (cloudEnabled && session?.token) setSyncStatus("synced", syncedLabel());
+      return;
+    }
+    if (syncInFlight) return syncInFlight;
+    syncInFlight = (async () => {
+      setSyncStatus("syncing", "同期中");
+      const sentJobs = Object.values(pendingSync.jobs);
+      if (sentJobs.length) {
+        await API.upsertJobs(session.token, sentJobs);
+        sentJobs.forEach(sent => {
+          const current = pendingSync.jobs[sent.id];
+          if (current && JSON.stringify(current) === JSON.stringify(sent)) delete pendingSync.jobs[sent.id];
+        });
+        persistPendingSync();
       }
-    }, 250);
+      if (pendingSync.master && session.user?.role === "admin") {
+        const sentMaster = JSON.stringify(masterData);
+        await API.saveMaster(session.token, masterData);
+        if (JSON.stringify(masterData) === sentMaster) pendingSync.master = false;
+        persistPendingSync();
+      }
+      if (pendingSync.invoice && session.user?.role === "admin") {
+        const sentInvoice = JSON.stringify(invoiceSettings);
+        await API.saveInvoiceSettings(session.token, invoiceSettings);
+        if (JSON.stringify(invoiceSettings) === sentInvoice) pendingSync.invoice = false;
+        persistPendingSync();
+      }
+      setSyncStatus("synced", syncedLabel());
+    })().catch(error => {
+      console.error(error);
+      setSyncStatus("error", "未同期あり");
+      showToast(error.message || "クラウド同期に失敗しました");
+      throw error;
+    }).finally(() => { syncInFlight = null; });
+    return syncInFlight;
   }
   function esc(value) { return String(value ?? "").replace(/[&<>'"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"}[c])); }
   function yen(value) { return new Intl.NumberFormat("ja-JP", { style:"currency", currency:"JPY", maximumFractionDigits:0 }).format(Number(value)||0); }
@@ -515,7 +583,7 @@
     return `
       <div class="toolbar">
         <div class="toolbar-group"><label for="billingMonth"><strong>対象月</strong></label><input id="billingMonth" class="form-control" type="month" value="${state.billingMonth}" /></div>
-        <div class="toolbar-group"><button class="ghost-btn" id="exportDataBtn">バックアップ</button><button class="ghost-btn" id="importDataBtn">復元</button><input id="importDataFile" type="file" accept="application/json" hidden><button class="ghost-btn" id="invoiceSettingsBtn">請求書設定</button><button class="ghost-btn" id="resetDemo">初期化</button></div>
+        <div class="toolbar-group"><button class="ghost-btn" id="exportDataBtn">バックアップ</button><button class="ghost-btn" id="importDataBtn">復元</button><input id="importDataFile" type="file" accept="application/json" hidden><button class="ghost-btn" id="invoiceSettingsBtn">請求書設定</button>${cloudEnabled?"":'<button class="ghost-btn" id="resetDemo">初期化</button>'}</div>
       </div>
       <div class="billing-status-strip"><span><b>${pendingCount}件</b> 請求前</span><span><b>${billedCount}件</b> 請求済み</span><small>完了した案件だけが自動で集計されます</small></div>
       <div class="billing-summary">
@@ -694,13 +762,17 @@
       if (job.photos[input.dataset.photo].length >= 4) { showToast("写真は各4枚まで登録できます"); return; }
       let photoUrl = dataUrl;
       if (cloudEnabled && session?.token) {
+        await flushPendingSync();
         setSyncStatus("syncing", "写真送信中");
         const uploaded = await API.uploadPhoto(session.token, { jobId: job.id, kind: input.dataset.photo, dataUrl });
         photoUrl = uploaded.url;
       }
       job.photos[input.dataset.photo].push(photoUrl);
       saveJobs(); render(); showToast("写真を追加しました");
-    } catch { showToast("写真を読み込めませんでした"); }
+    } catch (error) {
+      setSyncStatus("error", "写真送信エラー");
+      showToast(error?.message || "写真を送信できませんでした");
+    }
   }
   function compressImage(file) {
     return new Promise((resolve,reject)=>{
@@ -884,7 +956,7 @@
   }
 
   function exportData() {
-    const payload={version:"v006",exportedAt:new Date().toISOString(),jobs,invoiceSettings,masterData};
+    const payload={version:"v007",exportedAt:new Date().toISOString(),jobs,invoiceSettings,masterData};
     const blob=new Blob([JSON.stringify(payload,null,2)],{type:"application/json"});
     const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download=`cleanflow-backup-${new Date().toISOString().slice(0,10)}.json`; a.click(); URL.revokeObjectURL(url); showToast("バックアップを保存しました");
   }
@@ -921,6 +993,7 @@
         result = { token:`local-${loginId}`, user:account.user, expiresAt:new Date(Date.now()+14*86400000).toISOString() };
       }
       saveSession(result);
+      pendingSync = loadPendingSync();
       await enterApp();
     } catch (error) {
       el.loginError.textContent = error.message || "ログインできませんでした";
@@ -934,37 +1007,81 @@
   async function loadCloudSnapshot() {
     setSyncStatus("syncing", "読み込み中");
     const snapshot = await API.getSnapshot(session.token);
-    if (Array.isArray(snapshot.jobs)) jobs = snapshot.jobs.map(normalizeJob);
-    if (snapshot.masterData && typeof snapshot.masterData === "object") masterData = snapshot.masterData;
-    if (snapshot.invoiceSettings && typeof snapshot.invoiceSettings === "object") invoiceSettings = { ...defaultInvoiceSettings, ...snapshot.invoiceSettings };
+    const serverJobs = Array.isArray(snapshot.jobs) ? snapshot.jobs.map(normalizeJob) : [];
+    const merged = new Map(serverJobs.map(job => [job.id, job]));
+    Object.values(pendingSync.jobs).forEach(job => merged.set(job.id, normalizeJob(job)));
+    jobs = [...merged.values()];
+    if (!pendingSync.master && snapshot.masterData && typeof snapshot.masterData === "object") masterData = snapshot.masterData;
+    if (!pendingSync.invoice && snapshot.invoiceSettings && typeof snapshot.invoiceSettings === "object") invoiceSettings = { ...defaultInvoiceSettings, ...snapshot.invoiceSettings };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(jobs));
     localStorage.setItem(MASTER_KEY, JSON.stringify(masterData));
     localStorage.setItem(SETTINGS_KEY, JSON.stringify(invoiceSettings));
     rememberJobFingerprints();
-    setSyncStatus("synced", "同期済み");
+    lastCloudPullAt = Date.now();
+    setSyncStatus(hasPendingSync()?"error":"synced", hasPendingSync()?"未同期あり":syncedLabel());
+    return snapshot;
+  }
+
+  async function syncNow(showMessage=true) {
+    try {
+      await flushPendingSync();
+      await loadCloudSnapshot();
+      render();
+      if (showMessage) showToast("最新データに更新しました");
+    } catch (error) {
+      if (/期限|ログイン/.test(error.message || "")) { logout(); return; }
+      setSyncStatus("error", "接続エラー");
+      if (showMessage) showToast(error.message || "クラウドへ接続できませんでした");
+      throw error;
+    }
+  }
+
+  function startAutoRefresh() {
+    clearInterval(refreshTimer);
+    const interval = Math.max(60000, Number(CONFIG.autoRefreshMs) || 120000);
+    refreshTimer = setInterval(() => {
+      if (!document.hidden && session?.token && !syncInFlight) syncNow(false).catch(() => {});
+    }, interval);
   }
 
   async function enterApp() {
-    el.loginScreen.hidden = true;
-    el.app.hidden = false;
     state.mode = session.user.role === "admin" ? "admin" : "staff";
     state.currentStaff = session.user.role === "staff" ? session.user.name : (masterData.staff[0] || "");
     if (cloudEnabled) {
-      try { await loadCloudSnapshot(); }
-      catch (error) {
-        if (/期限|ログイン/.test(error.message || "")) { logout(); return; }
-        setSyncStatus("error", "読込エラー");
-        showToast("クラウドデータを読み込めませんでした。端末内データを表示します");
+      try {
+        await flushPendingSync();
+        await loadCloudSnapshot();
+      } catch (error) {
+        setSyncStatus("error", "接続エラー");
+        if (cloudOnly) {
+          saveSession(null);
+          el.app.hidden = true;
+          el.loginScreen.hidden = false;
+          el.loginError.textContent = error.message || "クラウドへ接続できませんでした。時間をおいて再度ログインしてください。";
+          el.loginError.hidden = false;
+          return false;
+        }
       }
     } else {
+      if (cloudOnly) {
+        el.loginError.textContent = "クラウド接続先が設定されていません。";
+        el.loginError.hidden = false;
+        return false;
+      }
       setSyncStatus("", "端末内保存");
       rememberJobFingerprints();
     }
+    el.loginScreen.hidden = true;
+    el.app.hidden = false;
     render();
+    startAutoRefresh();
+    return true;
   }
 
   function logout() {
+    clearInterval(refreshTimer);
     saveSession(null);
+    pendingSync = { jobs: {}, master: false, invoice: false };
     el.app.hidden = true;
     el.loginScreen.hidden = false;
     el.loginPin.value = "";
@@ -974,7 +1091,7 @@
 
   async function bootstrap() {
     el.demoLoginHelp.hidden = cloudEnabled || !CONFIG.allowLocalDemo;
-    el.loginModeLabel.textContent = cloudEnabled ? "クラウド共有モード" : "デモモード（この端末内に保存）";
+    el.loginModeLabel.textContent = cloudEnabled ? "クラウド共有モード・複数端末対応" : "クラウド未設定";
     el.loginForm.addEventListener("submit", handleLogin);
     if (session?.user) await enterApp();
   }
@@ -983,6 +1100,10 @@
   el.modeSwitch.addEventListener("click",switchMode);
   el.addJobTop.addEventListener("click",()=>openJobModal());
   el.userMenuButton.addEventListener("click",()=>{if(confirm("ログアウトしますか？"))logout();});
+  el.syncStatus.addEventListener("click",()=>syncNow(true).catch(()=>{}));
+  window.addEventListener("focus",()=>{
+    if (session?.token && Date.now()-lastCloudPullAt>60000 && !syncInFlight) syncNow(false).catch(()=>{});
+  });
   el.modalBackdrop.addEventListener("click",e=>{if(e.target===el.modalBackdrop)closeModal();});
   el.mobileMenuBtn.addEventListener("click",()=>el.app.classList.toggle("menu-open"));
   el.mobileOverlay.addEventListener("click",()=>el.app.classList.remove("menu-open"));

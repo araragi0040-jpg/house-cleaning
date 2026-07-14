@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="theme-color" content="#1f5f7a" />
-  <title>CleanFlow v006</title>
+  <title>CleanFlow v007</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
@@ -13,7 +13,7 @@
       <div class="login-brand"><div class="brand-mark">CF</div><div><strong>CleanFlow</strong><small>清掃業務管理</small></div></div>
       <div>
         <h1>ログイン</h1>
-        <p id="loginDescription">担当の案件と作業情報を確認します。</p>
+        <p id="loginDescription">クラウド上の案件と作業情報を確認します。</p>
       </div>
       <form id="loginForm" class="login-form">
         <label>ログインID<input id="loginId" class="form-control" autocomplete="username" required></label>
@@ -65,7 +65,7 @@
           <p id="pageSubtitle">今日の状況と対応事項を確認します</p>
         </div>
         <div class="topbar-actions">
-          <span id="syncStatus" class="sync-status"><i></i><span>端末内保存</span></span>
+          <button id="syncStatus" class="sync-status" type="button" title="最新データに更新"><i></i><span>接続確認中</span></button>
           <span id="todayLabel" class="date-label"></span>
           <button id="addJobTop" class="primary-btn">＋ 案件追加</button>
           <button id="userMenuButton" class="user-menu-button" type="button" aria-label="ログアウト"><span id="userInitial">管</span><b id="userName">管理者</b></button>

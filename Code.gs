@@ -1,5 +1,5 @@
 /**
- * CleanFlow v006 - Google Apps Script backend
+ * CleanFlow v007 - Google Apps Script backend（v006互換）
  *
  * 【導入手順】
  * 1. 新しい Google スプレッドシートを作成します。
