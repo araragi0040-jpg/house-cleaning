@@ -2,9 +2,11 @@
   "use strict";
 
   const TODAY = "2026-07-14";
-  const STORAGE_KEY = "cleanflow-v003-jobs";
-  const OLD_STORAGE_KEY = "cleanflow-v001-jobs";
-  const SETTINGS_KEY = "cleanflow-v003-invoice-settings";
+  const STORAGE_KEY = "cleanflow-v004-jobs";
+  const LEGACY_STORAGE_KEYS = ["cleanflow-v003-jobs", "cleanflow-v001-jobs"];
+  const SETTINGS_KEY = "cleanflow-v004-invoice-settings";
+  const LEGACY_SETTINGS_KEY = "cleanflow-v003-invoice-settings";
+  const STAFF_KEY = "cleanflow-v004-current-staff";
   const state = {
     mode: "admin",
     view: "dashboard",
@@ -14,6 +16,7 @@
     manualFromJob: false,
     weekOffset: 0,
     billingMonth: "2026-07",
+    currentStaff: localStorage.getItem(STAFF_KEY) || "山田",
   };
 
   // 初期版では単価設定をコード内の簡易マスタとして保持。
@@ -170,16 +173,28 @@
 
   function loadJobs() {
     try {
-      const current = localStorage.getItem(STORAGE_KEY);
-      const legacy = localStorage.getItem(OLD_STORAGE_KEY);
-      const stored = JSON.parse(current || legacy || "null");
-      return Array.isArray(stored) ? stored : structuredClone(initialJobs);
-    } catch { return structuredClone(initialJobs); }
+      const raw = localStorage.getItem(STORAGE_KEY) || LEGACY_STORAGE_KEYS.map(key => localStorage.getItem(key)).find(Boolean);
+      const stored = JSON.parse(raw || "null");
+      return Array.isArray(stored) ? stored.map(normalizeJob) : structuredClone(initialJobs).map(normalizeJob);
+    } catch { return structuredClone(initialJobs).map(normalizeJob); }
+  }
+  function normalizeJob(job) {
+    return {
+      ...job,
+      photos: {
+        before: Array.isArray(job?.photos?.before) ? job.photos.before : [],
+        after: Array.isArray(job?.photos?.after) ? job.photos.after : [],
+      },
+      issue: Boolean(job?.issue),
+      issueText: job?.issueText || "",
+      completedAt: job?.completedAt || "",
+      reviewedAt: job?.reviewedAt || "",
+    };
   }
   function saveJobs() { localStorage.setItem(STORAGE_KEY, JSON.stringify(jobs)); }
   function loadInvoiceSettings() {
     try {
-      const stored = JSON.parse(localStorage.getItem(SETTINGS_KEY));
+      const stored = JSON.parse(localStorage.getItem(SETTINGS_KEY) || localStorage.getItem(LEGACY_SETTINGS_KEY));
       return stored && typeof stored === "object" ? { ...defaultInvoiceSettings, ...stored } : { ...defaultInvoiceSettings };
     } catch { return { ...defaultInvoiceSettings }; }
   }
@@ -348,8 +363,13 @@
   function renderJobDetail() {
     const job = jobs.find(j=>j.id===state.selectedJobId);
     if (!job) return '<div class="empty-state"><b>案件が見つかりません</b></div>';
+    const photoThumbs=(kind)=> (job.photos?.[kind]||[]).length ? `<div class="admin-photo-grid">${job.photos[kind].map(src=>`<img src="${esc(src)}" alt="登録写真">`).join("")}</div>` : '<span class="muted-text">未登録</span>';
+    const reportAction = job.status === "done"
+      ? `<button class="primary-btn" data-approve-report="${job.id}">報告を確認して請求対象にする</button>`
+      : job.status === "billing" ? `<span class="reviewed-badge">✓ 報告確認済み</span>` : job.status === "billed" ? `<span class="reviewed-badge">✓ 請求済み</span>` : '';
     return `
       <div class="toolbar"><button class="ghost-btn" data-go="jobs">‹ 案件一覧へ</button><div class="toolbar-group"><button class="secondary-btn" data-edit-job="${job.id}">編集</button><button class="ghost-btn" data-staff-preview="${job.id}">スタッフ画面を確認</button></div></div>
+      ${job.issue?`<div class="issue-banner"><b>問題報告があります</b><span>${esc(job.issueText||"内容未入力")}</span></div>`:""}
       <div class="job-detail-grid">
         <section class="panel">
           <div class="panel-header"><div><h2>${esc(job.site)}</h2><small>${jpDate(job.date,true)} ${esc(job.start)}〜${esc(job.end||"")}</small></div><span class="status-chip ${job.status}">${statusLabel(job.status)}</span></div>
@@ -358,7 +378,7 @@
           </dl></div>
         </section>
         <div class="section-grid">
-          <section class="panel"><div class="panel-header"><h2>作業状況</h2></div><div class="panel-body"><dl class="detail-list">${detail("作業状態",statusLabel(job.status))}${detail("作業前写真",`${job.photos?.before?.length||0}枚`)}${detail("作業後写真",`${job.photos?.after?.length||0}枚`)}${detail("問題報告",job.issue?"あり":"なし")}</dl><div class="action-row"><button class="secondary-btn" data-status-next="${job.id}">状態を進める</button></div></div></section>
+          <section class="panel"><div class="panel-header"><h2>作業報告</h2></div><div class="panel-body"><dl class="detail-list">${detail("作業状態",statusLabel(job.status))}${detail("完了登録",job.completedAt?new Date(job.completedAt).toLocaleString("ja-JP"):"未登録")}${detail("問題報告",job.issue?`あり：${job.issueText||"内容未入力"}`:"なし")}</dl><div class="report-photo-block"><b>作業前写真</b>${photoThumbs("before")}</div><div class="report-photo-block"><b>作業後写真</b>${photoThumbs("after")}</div><div class="action-row">${reportAction}</div></div></section>
           <section class="panel"><div class="panel-header"><h2>金額</h2></div><div class="panel-body"><div class="money-box"><small>元請けへの請求予定</small><strong>${yen(job.billing+job.expense)}</strong></div><dl class="detail-list" style="margin-top:10px">${detail("作業単価",yen(job.billing))}${detail("経費",yen(job.expense))}${detail("担当者支払",yen(job.pay))}</dl></div></section>
         </div>
       </div>`;
@@ -374,7 +394,7 @@
     return `
       <div class="toolbar">
         <div class="toolbar-group"><label for="billingMonth"><strong>対象月</strong></label><input id="billingMonth" class="form-control" type="month" value="${state.billingMonth}" /></div>
-        <div class="toolbar-group"><button class="ghost-btn" id="invoiceSettingsBtn">請求書設定</button><button class="ghost-btn" id="resetDemo">デモデータを初期化</button></div>
+        <div class="toolbar-group"><button class="ghost-btn" id="exportDataBtn">バックアップ</button><button class="ghost-btn" id="importDataBtn">復元</button><input id="importDataFile" type="file" accept="application/json" hidden><button class="ghost-btn" id="invoiceSettingsBtn">請求書設定</button><button class="ghost-btn" id="resetDemo">初期化</button></div>
       </div>
       <div class="billing-status-strip"><span><b>${pendingCount}件</b> 請求前</span><span><b>${billedCount}件</b> 請求済み</span><small>完了した案件だけが自動で集計されます</small></div>
       <div class="billing-summary">
@@ -420,23 +440,28 @@
     bindSharedContentActions();
   }
 
-  function staffJobs() { return jobs.filter(j=>j.worker==="山田"); }
+  function staffJobs() { return jobs.filter(j=>j.worker===state.currentStaff); }
   function renderStaffJobs(todayOnly) {
     const list = staffJobs().filter(j=>todayOnly?j.date===TODAY:j.date>TODAY).sort((a,b)=>a.date.localeCompare(b.date)||a.start.localeCompare(b.start));
-    return `<div class="staff-job-list">${list.length?list.map(j=>`<article class="staff-job-card"><div class="time">${todayOnly?esc(j.start):jpDate(j.date)} ${!todayOnly?esc(j.start):""}</div><h3>${esc(j.site)}</h3><p>${esc(taskNames(j))}</p><button class="primary-btn" data-staff-job="${j.id}">案件を開く</button></article>`).join(""):'<div class="empty-state"><b>該当する案件はありません</b></div>'}</div>`;
+    return `<div class="staff-toolbar"><label>表示する担当者<select id="staffSelector" class="form-control">${["山田","佐藤"].map(name=>`<option ${state.currentStaff===name?"selected":""}>${name}</option>`).join("")}</select></label></div><div class="staff-job-list">${list.length?list.map(j=>`<article class="staff-job-card"><div class="staff-card-head"><div class="time">${todayOnly?esc(j.start):jpDate(j.date)} ${!todayOnly?esc(j.start):""}</div><span class="status-chip ${j.status}">${statusLabel(j.status)}</span></div><h3>${esc(j.site)}</h3><p>${esc(taskNames(j))}</p><button class="primary-btn" data-staff-job="${j.id}">案件を開く</button></article>`).join(""):'<div class="empty-state"><b>該当する案件はありません</b></div>'}</div>`;
   }
   function renderStaffNav() { return `<nav class="staff-bottom-nav"><button data-staff-go="today" class="${state.staffView==="today"?"active":""}"><span>⌂</span>今日</button><button data-staff-go="upcoming" class="${state.staffView==="upcoming"?"active":""}"><span>▦</span>今後</button><button data-staff-go="manuals" class="${state.staffView==="manuals"?"active":""}"><span>▧</span>手順書</button><button id="staffAdminSwitch"><span>⚙</span>管理</button></nav>`; }
 
   function renderStaffDetail() {
     const job = jobs.find(j=>j.id===state.selectedJobId);
     if (!job) return '<div class="empty-state"><b>案件が見つかりません</b></div>';
+    const photoSection = (kind, label) => {
+      const items = job.photos?.[kind] || [];
+      return `<div class="photo-group"><div class="photo-group-title"><b>${label}</b><span>${items.length}枚</span></div><div class="photo-preview-grid">${items.map((src,i)=>`<div class="photo-preview"><img alt="${esc(label)} ${i+1}" src="${esc(src)}"><button type="button" data-remove-photo="${kind}|${i}" aria-label="写真を削除">×</button></div>`).join("")}<label class="photo-btn compact"><input type="file" accept="image/*" capture="environment" data-photo="${kind}" hidden><span>＋<br>写真を追加</span></label></div></div>`;
+    };
+    const finished = ["done","billing","billed"].includes(job.status);
     return `<button class="ghost-btn" data-staff-go="today" style="margin-bottom:12px">‹ 戻る</button>
-      <section class="staff-detail-hero"><small>${jpDate(job.date,true)} ${esc(job.start)}〜${esc(job.end||"")}</small><h2>${esc(job.site)}</h2><p>${esc(taskNames(job))}</p></section>
-      <section class="staff-section"><h3>現場情報</h3><div class="staff-section-body"><p style="margin-top:0"><strong>${esc(job.address)}</strong></p><a class="secondary-btn" href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(job.address)}" target="_blank" rel="noopener" style="display:inline-block;text-decoration:none">地図を開く</a></div></section>
+      <section class="staff-detail-hero"><div class="staff-hero-status"><small>${jpDate(job.date,true)} ${esc(job.start)}〜${esc(job.end||"")}</small><span class="status-chip ${job.status}">${statusLabel(job.status)}</span></div><h2>${esc(job.site)}</h2><p>${esc(taskNames(job))}</p></section>
+      <section class="staff-section"><h3>現場情報</h3><div class="staff-section-body"><p style="margin-top:0"><strong>${esc(job.address)}</strong></p><div class="inline-actions"><a class="secondary-btn" href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(job.address)}" target="_blank" rel="noopener" style="display:inline-block;text-decoration:none">地図を開く</a>${job.phone?`<a class="ghost-btn" href="tel:${esc(job.phone)}" style="text-decoration:none">電話する</a>`:""}</div></div></section>
       <section class="staff-section"><h3>注意事項</h3><div class="staff-section-body"><div class="notice-box">${esc(job.note||"特別な注意事項はありません。")}</div></div></section>
       <section class="staff-section"><h3>作業手順</h3><div class="staff-section-body"><div class="manual-link-list">${job.tasks.map(id=>{const m=getManual(id);return `<button class="manual-link-btn" data-staff-manual="${id}"><span>${esc(m.name)}の手順を見る</span><span>›</span></button>`;}).join("")}</div></div></section>
-      <section class="staff-section"><h3>写真</h3><div class="staff-section-body"><div class="photo-grid"><label class="photo-btn"><input type="file" accept="image/*" capture="environment" data-photo="before" hidden><span>＋<br>作業前写真</span></label><label class="photo-btn"><input type="file" accept="image/*" capture="environment" data-photo="after" hidden><span>＋<br>作業後写真</span></label></div></div></section>
-      <div class="sticky-complete"><button class="primary-btn" data-complete-job="${job.id}">作業完了へ進む</button></div>`;
+      <section class="staff-section"><h3>写真</h3><div class="staff-section-body"><div class="photo-groups">${photoSection("before","作業前")}${photoSection("after","作業後")}</div></div></section>
+      <div class="sticky-complete">${finished?`<div class="complete-locked">✓ 作業完了を登録済み</div>`:`<button class="primary-btn" data-complete-job="${job.id}">作業完了へ進む</button>`}</div>`;
   }
 
   function renderComplete() {
@@ -473,11 +498,14 @@
     jobSearch?.addEventListener("input",filterRows); statusFilter?.addEventListener("change",filterRows);
     document.getElementById("billingMonth")?.addEventListener("change",e=>{state.billingMonth=e.target.value;render();});
     document.getElementById("invoiceSettingsBtn")?.addEventListener("click",openInvoiceSettings);
-    document.getElementById("resetDemo")?.addEventListener("click",()=>{localStorage.removeItem(STORAGE_KEY);jobs=structuredClone(initialJobs);render();showToast("デモデータを初期化しました");});
+    document.getElementById("exportDataBtn")?.addEventListener("click",exportData);
+    document.getElementById("importDataBtn")?.addEventListener("click",()=>document.getElementById("importDataFile")?.click());
+    document.getElementById("importDataFile")?.addEventListener("change",importData);
+    document.getElementById("resetDemo")?.addEventListener("click",()=>{if(!confirm("登録したデモデータを初期状態に戻しますか？"))return;localStorage.removeItem(STORAGE_KEY);jobs=structuredClone(initialJobs).map(normalizeJob);render();showToast("デモデータを初期化しました");});
 
     el.content.querySelectorAll("[data-edit-job]").forEach(b=>b.addEventListener("click",()=>openJobModal(jobs.find(j=>j.id===b.dataset.editJob))));
-    el.content.querySelectorAll("[data-staff-preview]").forEach(b=>b.addEventListener("click",()=>{state.selectedJobId=b.dataset.staffPreview;state.mode="staff";state.staffView="detail";render();}));
-    el.content.querySelectorAll("[data-status-next]").forEach(b=>b.addEventListener("click",()=>advanceStatus(b.dataset.statusNext)));
+    el.content.querySelectorAll("[data-staff-preview]").forEach(b=>b.addEventListener("click",()=>{state.selectedJobId=b.dataset.staffPreview;const previewJob=jobs.find(j=>j.id===state.selectedJobId);if(previewJob?.worker&&previewJob.worker!=="未設定"){state.currentStaff=previewJob.worker;localStorage.setItem(STAFF_KEY,state.currentStaff);}state.mode="staff";state.staffView="detail";render();}));
+    el.content.querySelectorAll("[data-approve-report]").forEach(b=>b.addEventListener("click",()=>approveReport(b.dataset.approveReport)));
     el.content.querySelectorAll("[data-billing-detail]").forEach(b=>b.addEventListener("click",()=>openBillingDetail(...b.dataset.billingDetail.split("|"))));
     el.content.querySelector("[data-manual-back]")?.addEventListener("click",()=>{state.view="manuals";render();});
 
@@ -488,24 +516,60 @@
     el.content.querySelector("[data-complete-job]")?.addEventListener("click",()=>{state.staffView="complete";render();});
     el.content.querySelector("[data-staff-back-detail]")?.addEventListener("click",()=>{state.staffView="detail";render();});
     document.getElementById("staffAdminSwitch")?.addEventListener("click",switchMode);
+    document.getElementById("staffSelector")?.addEventListener("change",e=>{state.currentStaff=e.target.value;localStorage.setItem(STAFF_KEY,state.currentStaff);render();});
     el.content.querySelectorAll("input[data-photo]").forEach(input=>input.addEventListener("change",handlePhoto));
+    el.content.querySelectorAll("[data-remove-photo]").forEach(btn=>btn.addEventListener("click",()=>removePhoto(btn.dataset.removePhoto)));
     const issueSelect=document.getElementById("issueSelect"); issueSelect?.addEventListener("change",()=>{document.getElementById("issueFields").hidden=issueSelect.value!=="yes";});
     document.getElementById("completeForm")?.addEventListener("submit",completeJob);
   }
 
-  function handlePhoto(event) {
+  async function handlePhoto(event) {
     const input=event.target; const file=input.files?.[0]; if(!file)return;
-    const label=input.closest("label"); const reader=new FileReader();
-    reader.onload=()=>{label.innerHTML=`<input type="file" accept="image/*" capture="environment" data-photo="${input.dataset.photo}" hidden><img alt="登録写真" src="${reader.result}">`;label.querySelector("input").addEventListener("change",handlePhoto);const job=jobs.find(j=>j.id===state.selectedJobId);job.photos ||= {before:[],after:[]};job.photos[input.dataset.photo]=["demo-photo"];saveJobs();};
-    reader.readAsDataURL(file);
+    try {
+      const dataUrl = await compressImage(file);
+      const job=jobs.find(j=>j.id===state.selectedJobId);
+      job.photos ||= {before:[],after:[]};
+      job.photos[input.dataset.photo] ||= [];
+      if (job.photos[input.dataset.photo].length >= 4) { showToast("写真は各4枚まで登録できます"); return; }
+      job.photos[input.dataset.photo].push(dataUrl);
+      saveJobs(); render(); showToast("写真を追加しました");
+    } catch { showToast("写真を読み込めませんでした"); }
+  }
+  function compressImage(file) {
+    return new Promise((resolve,reject)=>{
+      const reader=new FileReader();
+      reader.onerror=reject;
+      reader.onload=()=>{
+        const img=new Image();
+        img.onerror=reject;
+        img.onload=()=>{
+          const max=1024; const scale=Math.min(1,max/Math.max(img.width,img.height));
+          const canvas=document.createElement("canvas"); canvas.width=Math.max(1,Math.round(img.width*scale)); canvas.height=Math.max(1,Math.round(img.height*scale));
+          canvas.getContext("2d").drawImage(img,0,0,canvas.width,canvas.height);
+          resolve(canvas.toDataURL("image/jpeg",.65));
+        };
+        img.src=reader.result;
+      };
+      reader.readAsDataURL(file);
+    });
+  }
+  function removePhoto(value) {
+    const [kind,indexText]=value.split("|"); const index=Number(indexText); const job=jobs.find(j=>j.id===state.selectedJobId);
+    if(!job?.photos?.[kind])return; job.photos[kind].splice(index,1); saveJobs(); render(); showToast("写真を削除しました");
   }
 
   function completeJob(e) {
-    e.preventDefault(); const job=jobs.find(j=>j.id===state.selectedJobId); job.status="done";job.issue=document.getElementById("issueSelect").value==="yes";job.issueText=document.getElementById("issueText")?.value||"";job.expense=Number(document.getElementById("expenseInput").value)||0;saveJobs();showToast("作業完了を登録しました");state.staffView="today";render();
+    e.preventDefault();
+    const job=jobs.find(j=>j.id===state.selectedJobId);
+    const hasIssue=document.getElementById("issueSelect").value==="yes";
+    const issueText=document.getElementById("issueText")?.value.trim()||"";
+    if(hasIssue&&!issueText){showToast("問題内容を入力してください");return;}
+    job.status="done";job.issue=hasIssue;job.issueText=issueText;job.expense=Number(document.getElementById("expenseInput").value)||0;job.completedAt=new Date().toISOString();job.reviewedAt="";saveJobs();showToast("作業完了を登録しました");state.staffView="today";render();
   }
 
-  function advanceStatus(id) {
-    const order=["planned","progress","done","billing","billed"]; const job=jobs.find(j=>j.id===id); const i=order.indexOf(job.status); job.status=order[Math.min(i+1,order.length-1)];saveJobs();render();showToast(`状態を「${statusLabel(job.status)}」に変更しました`);
+  function approveReport(id) {
+    const job=jobs.find(j=>j.id===id); if(!job)return;
+    job.status="billing"; job.reviewedAt=new Date().toISOString(); saveJobs(); render(); showToast("報告を確認し、請求対象にしました");
   }
 
   function openJobModal(job=null) {
@@ -552,7 +616,7 @@
     if(!edit) recalc();
     clientSelect.addEventListener("change",recalc);
     form.querySelectorAll('input[name="tasks"]').forEach(x=>x.addEventListener("change",recalc));
-    form.addEventListener("submit",e=>{e.preventDefault();const fd=new FormData(e.currentTarget);const tasks=fd.getAll("tasks");if(!tasks.length){showToast("作業内容を1つ以上選択してください");return;}const payload={id:job?.id||`J${Date.now()}`,date:fd.get("date"),start:fd.get("start"),end:fd.get("end"),client:fd.get("client"),site:fd.get("site"),address:fd.get("address"),phone:fd.get("phone"),worker:fd.get("worker"),tasks,status:job?.status||"planned",note:fd.get("note"),billing:Number(fd.get("billing"))||0,pay:Number(fd.get("pay"))||0,expense:Number(fd.get("expense"))||0,issue:job?.issue||false,issueText:job?.issueText||"",photos:job?.photos||{before:[],after:[]}};if(edit)jobs=jobs.map(j=>j.id===job.id?payload:j);else jobs.push(payload);saveJobs();closeModal();state.view="jobs";render();showToast(edit?"案件を更新しました":"案件を登録しました");});
+    form.addEventListener("submit",e=>{e.preventDefault();const fd=new FormData(e.currentTarget);const tasks=fd.getAll("tasks");if(!tasks.length){showToast("作業内容を1つ以上選択してください");return;}const payload={id:job?.id||`J${Date.now()}`,date:fd.get("date"),start:fd.get("start"),end:fd.get("end"),client:fd.get("client"),site:fd.get("site"),address:fd.get("address"),phone:fd.get("phone"),worker:fd.get("worker"),tasks,status:job?.status||"planned",note:fd.get("note"),billing:Number(fd.get("billing"))||0,pay:Number(fd.get("pay"))||0,expense:Number(fd.get("expense"))||0,issue:job?.issue||false,issueText:job?.issueText||"",photos:job?.photos||{before:[],after:[]},completedAt:job?.completedAt||"",reviewedAt:job?.reviewedAt||""};if(edit)jobs=jobs.map(j=>j.id===job.id?payload:j);else jobs.push(payload);saveJobs();closeModal();state.view="jobs";render();showToast(edit?"案件を更新しました":"案件を登録しました");});
   }
 
   function openBillingDetail(type,name) {
@@ -614,6 +678,18 @@
       body{font-family:-apple-system,BlinkMacSystemFont,"Yu Gothic",sans-serif;color:#1f2933;margin:0;background:#eef2f5}.page{width:210mm;min-height:297mm;margin:18px auto;padding:18mm;background:#fff;box-sizing:border-box}.actions{position:fixed;right:20px;top:20px}.actions button{border:0;border-radius:8px;background:#1f5f7a;color:#fff;padding:11px 18px;font-weight:700;cursor:pointer}h1{font-size:30px;letter-spacing:.25em;text-align:center;margin:0 0 35px}.top{display:grid;grid-template-columns:1fr 1fr;gap:30px}.to{font-size:20px;font-weight:700;border-bottom:1px solid #333;padding:10px 0}.meta{text-align:right;font-size:13px;line-height:1.8}.issuer{margin-top:18px;text-align:right;line-height:1.65}.amount{margin:32px 0 22px;padding:16px 18px;background:#edf5f8;border-left:5px solid #1f5f7a;display:flex;justify-content:space-between;align-items:center}.amount strong{font-size:28px}table{width:100%;border-collapse:collapse}th,td{border:1px solid #b9c4cc;padding:10px;font-size:12px}th{background:#eef2f5}.num{text-align:right;white-space:nowrap}.summary{margin-left:auto;width:45%;margin-top:12px}.summary div{display:flex;justify-content:space-between;padding:9px;border-bottom:1px solid #cbd5dc}.summary .total{font-size:18px;font-weight:700;border-bottom:2px solid #333}.bank,.notes{margin-top:28px;border:1px solid #cbd5dc;padding:14px;line-height:1.7;font-size:12px}.bank b,.notes b{display:block;margin-bottom:5px}small{color:#64727c}@media print{body{background:#fff}.page{margin:0;width:auto;min-height:auto}.actions{display:none}} 
     </style></head><body><div class="actions"><button onclick="window.print()">印刷・PDF保存</button></div><main class="page"><h1>請 求 書</h1><div class="top"><div><div class="to">${esc(clientName)} 御中</div><p>${esc(state.billingMonth.replace("-","年"))}月分 清掃作業費として</p></div><div class="meta">発行日：${esc(issueDate)}<br>請求番号：${esc(number)}<div class="issuer"><b>${esc(invoiceSettings.issuerName)}</b><br>${esc(invoiceSettings.issuerAddress)}${invoiceSettings.issuerPhone?`<br>TEL ${esc(invoiceSettings.issuerPhone)}`:""}${invoiceSettings.registrationNumber?`<br>登録番号 ${esc(invoiceSettings.registrationNumber)}`:""}</div></div></div><div class="amount"><span>ご請求金額</span><strong>${yen(total)}</strong></div><table><thead><tr><th style="width:18%">作業日</th><th style="width:33%">現場</th><th>作業内容</th><th style="width:18%">金額</th></tr></thead><tbody>${rows}</tbody></table><div class="summary"><div class="total"><span>合計</span><span>${yen(total)}</span></div></div><div class="bank"><b>お振込先</b>${esc(invoiceSettings.bankInfo).replaceAll("\n","<br>")}</div><div class="notes"><b>お支払条件・備考</b>${esc(invoiceSettings.paymentTerms)}<br>${esc(invoiceSettings.note)}</div></main></body></html>`);
     win.document.close();
+  }
+
+  function exportData() {
+    const payload={version:"v004",exportedAt:new Date().toISOString(),jobs,invoiceSettings};
+    const blob=new Blob([JSON.stringify(payload,null,2)],{type:"application/json"});
+    const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download=`cleanflow-backup-${new Date().toISOString().slice(0,10)}.json`; a.click(); URL.revokeObjectURL(url); showToast("バックアップを保存しました");
+  }
+  function importData(event) {
+    const file=event.target.files?.[0]; if(!file)return;
+    const reader=new FileReader();
+    reader.onload=()=>{try{const data=JSON.parse(reader.result);if(!Array.isArray(data.jobs))throw new Error();jobs=data.jobs.map(normalizeJob);invoiceSettings={...defaultInvoiceSettings,...(data.invoiceSettings||{})};saveJobs();saveInvoiceSettings();render();showToast("バックアップを復元しました");}catch{showToast("バックアップファイルを読み込めませんでした");}finally{event.target.value="";}};
+    reader.readAsText(file);
   }
 
   function openModal(){el.modalBackdrop.hidden=false;document.body.style.overflow="hidden";}
