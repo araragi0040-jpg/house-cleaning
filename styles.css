@@ -491,3 +491,83 @@ button:disabled { opacity: .45; cursor: not-allowed; }
   .inline-actions { align-items: stretch; }
   .inline-actions > * { flex: 1; text-align: center; }
 }
+
+/* v005: editable master data */
+.settings-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+  margin-bottom: 18px;
+}
+.panel-header small {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.master-list { display: grid; gap: 9px; }
+.master-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 11px 0;
+  border-bottom: 1px solid #edf1f3;
+}
+.master-row:last-child { border-bottom: 0; }
+.master-row strong, .master-row small { display: block; }
+.master-row small { margin-top: 4px; color: var(--muted); }
+.settings-price-panel { margin-bottom: 18px; }
+.price-master-table { display: grid; gap: 0; }
+.price-master-head, .price-master-row {
+  display: grid;
+  grid-template-columns: minmax(180px,1.2fr) minmax(150px,.7fr) minmax(150px,.7fr);
+  gap: 14px;
+  align-items: center;
+}
+.price-master-head {
+  padding: 0 10px 9px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+.price-master-row {
+  padding: 11px 10px;
+  border-top: 1px solid var(--line);
+}
+.price-master-row label { display: block; }
+.mobile-price-label { display: none; }
+.settings-save-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 14px;
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+.settings-save-row span { color: var(--muted); font-size: 12px; line-height: 1.6; }
+.settings-inline {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 18px;
+}
+.settings-inline h2 { margin: 0; font-size: 17px; }
+.settings-inline p { margin: 6px 0 0; color: var(--muted); font-size: 13px; }
+
+@media (max-width: 900px) {
+  .settings-grid { grid-template-columns: 1fr; }
+}
+@media (max-width: 760px) {
+  .price-master-head { display: none; }
+  .price-master-row {
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    padding: 14px 0;
+  }
+  .price-master-row > strong { grid-column: 1 / -1; }
+  .mobile-price-label { display: block; margin-bottom: 5px; color: var(--muted); font-size: 11px; font-weight: 800; }
+  .settings-save-row, .settings-inline { align-items: stretch; flex-direction: column; }
+  .settings-save-row .primary-btn, .settings-inline .secondary-btn { width: 100%; }
+}

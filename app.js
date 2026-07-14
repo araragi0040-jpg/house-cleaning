@@ -2,11 +2,13 @@
   "use strict";
 
   const TODAY = "2026-07-14";
-  const STORAGE_KEY = "cleanflow-v004-jobs";
-  const LEGACY_STORAGE_KEYS = ["cleanflow-v003-jobs", "cleanflow-v001-jobs"];
-  const SETTINGS_KEY = "cleanflow-v004-invoice-settings";
-  const LEGACY_SETTINGS_KEY = "cleanflow-v003-invoice-settings";
-  const STAFF_KEY = "cleanflow-v004-current-staff";
+  const STORAGE_KEY = "cleanflow-v005-jobs";
+  const LEGACY_STORAGE_KEYS = ["cleanflow-v004-jobs", "cleanflow-v003-jobs", "cleanflow-v001-jobs"];
+  const SETTINGS_KEY = "cleanflow-v005-invoice-settings";
+  const LEGACY_SETTINGS_KEYS = ["cleanflow-v004-invoice-settings", "cleanflow-v003-invoice-settings"];
+  const STAFF_KEY = "cleanflow-v005-current-staff";
+  const MASTER_KEY = "cleanflow-v005-master";
+  const LEGACY_STAFF_KEY = "cleanflow-v004-current-staff";
   const state = {
     mode: "admin",
     view: "dashboard",
@@ -16,29 +18,32 @@
     manualFromJob: false,
     weekOffset: 0,
     billingMonth: "2026-07",
-    currentStaff: localStorage.getItem(STAFF_KEY) || "山田",
+    currentStaff: localStorage.getItem(STAFF_KEY) || localStorage.getItem(LEGACY_STAFF_KEY) || "山田",
+    settingsClient: "A管理会社",
   };
 
-  // 初期版では単価設定をコード内の簡易マスタとして保持。
-  // 実運用時は管理画面から編集できるクラウドデータへ移行する。
-  const priceMaster = {
-    "A管理会社": {
-      vacant: { billing: 24000, pay: 14000 },
-      kitchen: { billing: 15000, pay: 8500 },
-      bath: { billing: 12000, pay: 7000 },
-      aircon: { billing: 8000, pay: 5000 },
-      washbasin: { billing: 5000, pay: 3000 },
-      toilet: { billing: 5000, pay: 3000 },
+  const defaultMasterData = {
+    clients: ["A管理会社", "B不動産", "その他"],
+    staff: ["山田", "佐藤"],
+    prices: {
+      "A管理会社": {
+        vacant: { billing: 24000, pay: 14000 },
+        kitchen: { billing: 15000, pay: 8500 },
+        bath: { billing: 12000, pay: 7000 },
+        aircon: { billing: 8000, pay: 5000 },
+        washbasin: { billing: 5000, pay: 3000 },
+        toilet: { billing: 5000, pay: 3000 },
+      },
+      "B不動産": {
+        vacant: { billing: 25000, pay: 14500 },
+        kitchen: { billing: 14500, pay: 8000 },
+        bath: { billing: 12000, pay: 7000 },
+        aircon: { billing: 8500, pay: 5000 },
+        washbasin: { billing: 5200, pay: 3000 },
+        toilet: { billing: 5200, pay: 3000 },
+      },
+      "その他": {},
     },
-    "B不動産": {
-      vacant: { billing: 25000, pay: 14500 },
-      kitchen: { billing: 14500, pay: 8000 },
-      bath: { billing: 12000, pay: 7000 },
-      aircon: { billing: 8500, pay: 5000 },
-      washbasin: { billing: 5200, pay: 3000 },
-      toilet: { billing: 5200, pay: 3000 },
-    },
-    "その他": {},
   };
 
   const defaultInvoiceSettings = {
@@ -170,6 +175,9 @@
 
   let jobs = loadJobs();
   let invoiceSettings = loadInvoiceSettings();
+  let masterData = loadMasterData();
+  if (!masterData.staff.includes(state.currentStaff)) state.currentStaff = masterData.staff[0] || "";
+  if (!masterData.clients.includes(state.settingsClient)) state.settingsClient = masterData.clients[0] || "";
 
   function loadJobs() {
     try {
@@ -194,14 +202,29 @@
   function saveJobs() { localStorage.setItem(STORAGE_KEY, JSON.stringify(jobs)); }
   function loadInvoiceSettings() {
     try {
-      const stored = JSON.parse(localStorage.getItem(SETTINGS_KEY) || localStorage.getItem(LEGACY_SETTINGS_KEY));
+      const legacy = LEGACY_SETTINGS_KEYS.map(key => localStorage.getItem(key)).find(Boolean);
+      const stored = JSON.parse(localStorage.getItem(SETTINGS_KEY) || legacy || "null");
       return stored && typeof stored === "object" ? { ...defaultInvoiceSettings, ...stored } : { ...defaultInvoiceSettings };
     } catch { return { ...defaultInvoiceSettings }; }
   }
   function saveInvoiceSettings() { localStorage.setItem(SETTINGS_KEY, JSON.stringify(invoiceSettings)); }
+  function loadMasterData() {
+    try {
+      const stored = JSON.parse(localStorage.getItem(MASTER_KEY) || "null");
+      if (!stored || !Array.isArray(stored.clients) || !Array.isArray(stored.staff)) return structuredClone(defaultMasterData);
+      return {
+        clients: [...new Set(stored.clients.filter(Boolean))],
+        staff: [...new Set(stored.staff.filter(Boolean))],
+        prices: stored.prices && typeof stored.prices === "object" ? stored.prices : {},
+      };
+    } catch { return structuredClone(defaultMasterData); }
+  }
+  function saveMasterData() { localStorage.setItem(MASTER_KEY, JSON.stringify(masterData)); }
+  function clientNames() { return masterData.clients; }
+  function staffNames() { return masterData.staff; }
   function suggestedAmounts(client, tasks) {
     return (tasks || []).reduce((sum, taskId) => {
-      const rate = priceMaster[client]?.[taskId] || { billing: 0, pay: 0 };
+      const rate = masterData.prices[client]?.[taskId] || { billing: 0, pay: 0 };
       sum.billing += Number(rate.billing) || 0;
       sum.pay += Number(rate.pay) || 0;
       return sum;
@@ -248,7 +271,8 @@
       calendar: ["カレンダー", "案件と担当者の予定を確認します", renderCalendar],
       jobs: ["案件", "登録済みの案件を一覧で確認します", renderJobs],
       billing: ["請求・支払", "完了案件から月次金額を確認します", renderBilling],
-      manuals: ["手順書", "現場で使用するマニュアルを管理します", renderManuals],
+      manuals: ["手順書", "現場で使用するマニュアルを確認します", renderManuals],
+      settings: ["設定", "元請け・担当者・単価を管理します", renderSettings],
       detail: ["案件詳細", "予定・報告・金額をまとめて確認します", renderJobDetail],
       manualDetail: ["手順書詳細", "重要事項と作業の流れを確認します", renderManualDetail],
     };
@@ -323,7 +347,7 @@
           <button class="ghost-btn" data-week="1">次週 ›</button>
         </div>
         <div class="toolbar-group">
-          <select id="workerFilter" class="filter-select"><option value="all">全担当者</option><option>山田</option><option>佐藤</option><option>未設定</option></select>
+          <select id="workerFilter" class="filter-select"><option value="all">全担当者</option>${staffNames().map(name=>`<option>${esc(name)}</option>`).join("")}<option>未設定</option></select>
           <button class="primary-btn" data-add-job>＋ 案件追加</button>
         </div>
       </div>
@@ -368,7 +392,7 @@
       ? `<button class="primary-btn" data-approve-report="${job.id}">報告を確認して請求対象にする</button>`
       : job.status === "billing" ? `<span class="reviewed-badge">✓ 報告確認済み</span>` : job.status === "billed" ? `<span class="reviewed-badge">✓ 請求済み</span>` : '';
     return `
-      <div class="toolbar"><button class="ghost-btn" data-go="jobs">‹ 案件一覧へ</button><div class="toolbar-group"><button class="secondary-btn" data-edit-job="${job.id}">編集</button><button class="ghost-btn" data-staff-preview="${job.id}">スタッフ画面を確認</button></div></div>
+      <div class="toolbar"><button class="ghost-btn" data-go="jobs">‹ 案件一覧へ</button><div class="toolbar-group"><button class="ghost-btn" data-duplicate-job="${job.id}">複製</button><button class="secondary-btn" data-edit-job="${job.id}">編集</button><button class="ghost-btn" data-staff-preview="${job.id}">スタッフ画面を確認</button></div></div>
       ${job.issue?`<div class="issue-banner"><b>問題報告があります</b><span>${esc(job.issueText||"内容未入力")}</span></div>`:""}
       <div class="job-detail-grid">
         <section class="panel">
@@ -414,6 +438,34 @@
     return `<div class="billing-row"><div><strong>${esc(name)}</strong><br><small>${list.length}件${isClient ? `・未請求 ${pending}件` : ""}</small></div><span class="billing-amount">${yen(total)}</span><button class="secondary-btn" data-billing-detail="${type}|${esc(name)}">${isClient?"請求確認":"明細確認"}</button></div>`;
   }
 
+  function renderSettings() {
+    const selectedClient = masterData.clients.includes(state.settingsClient) ? state.settingsClient : (masterData.clients[0] || "");
+    state.settingsClient = selectedClient;
+    const rates = masterData.prices[selectedClient] || {};
+    return `
+      <div class="settings-grid">
+        <section class="panel">
+          <div class="panel-header"><div><h2>元請け</h2><small>案件登録時に選択します</small></div><button class="secondary-btn" id="addClientBtn">＋ 追加</button></div>
+          <div class="panel-body master-list">
+            ${clientNames().map(name=>`<div class="master-row"><div><strong>${esc(name)}</strong><small>${jobs.filter(j=>j.client===name).length}件の案件で使用</small></div><button class="ghost-btn" data-edit-price="${esc(name)}">単価</button></div>`).join("") || '<div class="empty-state"><b>元請けが未登録です</b></div>'}
+          </div>
+        </section>
+        <section class="panel">
+          <div class="panel-header"><div><h2>担当者</h2><small>スタッフ画面と担当割当に使用します</small></div><button class="secondary-btn" id="addStaffBtn">＋ 追加</button></div>
+          <div class="panel-body master-list">
+            ${staffNames().map(name=>`<div class="master-row"><div><strong>${esc(name)}</strong><small>${jobs.filter(j=>j.worker===name).length}件の案件で使用</small></div><span class="person-chip">利用中</span></div>`).join("") || '<div class="empty-state"><b>担当者が未登録です</b></div>'}
+          </div>
+        </section>
+      </div>
+      <section class="panel settings-price-panel">
+        <div class="panel-header"><div><h2>元請け別単価</h2><small>案件登録時に請求額・担当者支払額を自動入力します</small></div><select id="priceClientSelect" class="filter-select">${clientNames().map(name=>`<option value="${esc(name)}" ${selectedClient===name?"selected":""}>${esc(name)}</option>`).join("")}</select></div>
+        <form id="priceMasterForm" class="panel-body">
+          ${selectedClient ? `<div class="price-master-table"><div class="price-master-head"><span>作業内容</span><span>元請け請求</span><span>担当者支払</span></div>${manuals.map(m=>{const rate=rates[m.id]||{};return `<div class="price-master-row"><strong>${esc(m.name)}</strong><label><span class="mobile-price-label">元請け請求</span><input class="form-control" type="number" min="0" step="1" name="billing__${m.id}" value="${Number(rate.billing)||0}"></label><label><span class="mobile-price-label">担当者支払</span><input class="form-control" type="number" min="0" step="1" name="pay__${m.id}" value="${Number(rate.pay)||0}"></label></div>`;}).join("")}</div><div class="settings-save-row"><span>変更後、新しく登録する案件から自動反映されます。</span><button class="primary-btn" type="submit">単価を保存</button></div>` : '<div class="empty-state"><b>元請けを追加してください</b></div>'}
+        </form>
+      </section>
+      <section class="panel settings-invoice-panel"><div class="panel-body settings-inline"><div><h2>請求書の発行者情報</h2><p>会社名、振込先、支払条件などを設定します。</p></div><button class="secondary-btn" id="settingsInvoiceBtn">請求書設定を開く</button></div></section>`;
+  }
+
   function renderManuals() {
     return `<div class="manual-grid">${manuals.map(m=>`<article class="manual-card"><div class="manual-icon">${esc(m.icon)}</div><h3>${esc(m.name)}</h3><p>${esc(m.summary)}</p><div class="manual-actions"><button class="secondary-btn" data-manual-id="${m.id}">要点を見る</button><a class="ghost-btn" href="${encodeURI(m.file)}" target="_blank" rel="noopener" style="text-decoration:none">PDF</a></div></article>`).join("")}</div>`;
   }
@@ -443,7 +495,7 @@
   function staffJobs() { return jobs.filter(j=>j.worker===state.currentStaff); }
   function renderStaffJobs(todayOnly) {
     const list = staffJobs().filter(j=>todayOnly?j.date===TODAY:j.date>TODAY).sort((a,b)=>a.date.localeCompare(b.date)||a.start.localeCompare(b.start));
-    return `<div class="staff-toolbar"><label>表示する担当者<select id="staffSelector" class="form-control">${["山田","佐藤"].map(name=>`<option ${state.currentStaff===name?"selected":""}>${name}</option>`).join("")}</select></label></div><div class="staff-job-list">${list.length?list.map(j=>`<article class="staff-job-card"><div class="staff-card-head"><div class="time">${todayOnly?esc(j.start):jpDate(j.date)} ${!todayOnly?esc(j.start):""}</div><span class="status-chip ${j.status}">${statusLabel(j.status)}</span></div><h3>${esc(j.site)}</h3><p>${esc(taskNames(j))}</p><button class="primary-btn" data-staff-job="${j.id}">案件を開く</button></article>`).join(""):'<div class="empty-state"><b>該当する案件はありません</b></div>'}</div>`;
+    return `<div class="staff-toolbar"><label>表示する担当者<select id="staffSelector" class="form-control">${staffNames().map(name=>`<option ${state.currentStaff===name?"selected":""}>${esc(name)}</option>`).join("")}</select></label></div><div class="staff-job-list">${list.length?list.map(j=>`<article class="staff-job-card"><div class="staff-card-head"><div class="time">${todayOnly?esc(j.start):jpDate(j.date)} ${!todayOnly?esc(j.start):""}</div><span class="status-chip ${j.status}">${statusLabel(j.status)}</span></div><h3>${esc(j.site)}</h3><p>${esc(taskNames(j))}</p><button class="primary-btn" data-staff-job="${j.id}">案件を開く</button></article>`).join(""):'<div class="empty-state"><b>該当する案件はありません</b></div>'}</div>`;
   }
   function renderStaffNav() { return `<nav class="staff-bottom-nav"><button data-staff-go="today" class="${state.staffView==="today"?"active":""}"><span>⌂</span>今日</button><button data-staff-go="upcoming" class="${state.staffView==="upcoming"?"active":""}"><span>▦</span>今後</button><button data-staff-go="manuals" class="${state.staffView==="manuals"?"active":""}"><span>▧</span>手順書</button><button id="staffAdminSwitch"><span>⚙</span>管理</button></nav>`; }
 
@@ -501,9 +553,14 @@
     document.getElementById("exportDataBtn")?.addEventListener("click",exportData);
     document.getElementById("importDataBtn")?.addEventListener("click",()=>document.getElementById("importDataFile")?.click());
     document.getElementById("importDataFile")?.addEventListener("change",importData);
-    document.getElementById("resetDemo")?.addEventListener("click",()=>{if(!confirm("登録したデモデータを初期状態に戻しますか？"))return;localStorage.removeItem(STORAGE_KEY);jobs=structuredClone(initialJobs).map(normalizeJob);render();showToast("デモデータを初期化しました");});
+    document.getElementById("resetDemo")?.addEventListener("click",()=>{if(!confirm("登録したデモデータを初期状態に戻しますか？"))return;localStorage.removeItem(STORAGE_KEY);localStorage.removeItem(MASTER_KEY);jobs=structuredClone(initialJobs).map(normalizeJob);masterData=structuredClone(defaultMasterData);state.settingsClient=masterData.clients[0];render();showToast("デモデータを初期化しました");});
 
     el.content.querySelectorAll("[data-edit-job]").forEach(b=>b.addEventListener("click",()=>openJobModal(jobs.find(j=>j.id===b.dataset.editJob))));
+    el.content.querySelectorAll("[data-duplicate-job]").forEach(b=>b.addEventListener("click",()=>{
+      const source=jobs.find(j=>j.id===b.dataset.duplicateJob);
+      if(!source)return;
+      openJobModal({...source,date:TODAY,status:"planned",issue:false,issueText:"",photos:{before:[],after:[]},completedAt:"",reviewedAt:""},{duplicate:true});
+    }));
     el.content.querySelectorAll("[data-staff-preview]").forEach(b=>b.addEventListener("click",()=>{state.selectedJobId=b.dataset.staffPreview;const previewJob=jobs.find(j=>j.id===state.selectedJobId);if(previewJob?.worker&&previewJob.worker!=="未設定"){state.currentStaff=previewJob.worker;localStorage.setItem(STAFF_KEY,state.currentStaff);}state.mode="staff";state.staffView="detail";render();}));
     el.content.querySelectorAll("[data-approve-report]").forEach(b=>b.addEventListener("click",()=>approveReport(b.dataset.approveReport)));
     el.content.querySelectorAll("[data-billing-detail]").forEach(b=>b.addEventListener("click",()=>openBillingDetail(...b.dataset.billingDetail.split("|"))));
@@ -520,6 +577,12 @@
     el.content.querySelectorAll("input[data-photo]").forEach(input=>input.addEventListener("change",handlePhoto));
     el.content.querySelectorAll("[data-remove-photo]").forEach(btn=>btn.addEventListener("click",()=>removePhoto(btn.dataset.removePhoto)));
     const issueSelect=document.getElementById("issueSelect"); issueSelect?.addEventListener("change",()=>{document.getElementById("issueFields").hidden=issueSelect.value!=="yes";});
+    document.getElementById("addClientBtn")?.addEventListener("click",()=>openAddMasterModal("client"));
+    document.getElementById("addStaffBtn")?.addEventListener("click",()=>openAddMasterModal("staff"));
+    document.getElementById("settingsInvoiceBtn")?.addEventListener("click",openInvoiceSettings);
+    document.getElementById("priceClientSelect")?.addEventListener("change",e=>{state.settingsClient=e.target.value;render();});
+    el.content.querySelectorAll("[data-edit-price]").forEach(b=>b.addEventListener("click",()=>{state.settingsClient=b.dataset.editPrice;render();document.querySelector(".settings-price-panel")?.scrollIntoView({behavior:"smooth",block:"start"});}));
+    document.getElementById("priceMasterForm")?.addEventListener("submit",savePriceMaster);
     document.getElementById("completeForm")?.addEventListener("submit",completeJob);
   }
 
@@ -572,13 +635,49 @@
     job.status="billing"; job.reviewedAt=new Date().toISOString(); saveJobs(); render(); showToast("報告を確認し、請求対象にしました");
   }
 
-  function openJobModal(job=null) {
-    const edit=Boolean(job); const today=TODAY;
-    el.modal.innerHTML=`<form id="jobForm"><div class="modal-header"><h2 id="modalTitle">${edit?"案件を編集":"新しい案件"}</h2><button class="close-btn" type="button" data-close>×</button></div><div class="modal-body">
+  function openAddMasterModal(type) {
+    const isClient=type==="client";
+    const label=isClient?"元請け":"担当者";
+    el.modal.innerHTML=`<form id="addMasterForm"><div class="modal-header"><h2 id="modalTitle">${label}を追加</h2><button class="close-btn" type="button" data-close>×</button></div><div class="modal-body"><p class="modal-lead">名称を入力すると、案件登録の選択肢に追加されます。</p><div class="form-group"><label>${label}名</label><input id="masterNameInput" name="name" class="form-control" maxlength="50" autocomplete="off" required></div></div><div class="modal-footer"><button type="button" class="ghost-btn" data-close>キャンセル</button><button class="primary-btn" type="submit">追加</button></div></form>`;
+    openModal();
+    el.modal.querySelectorAll("[data-close]").forEach(b=>b.addEventListener("click",closeModal));
+    document.getElementById("addMasterForm").addEventListener("submit",e=>{
+      e.preventDefault();
+      const name=document.getElementById("masterNameInput").value.trim();
+      if(!name)return;
+      const list=isClient?masterData.clients:masterData.staff;
+      if(list.includes(name)){showToast(`同じ${label}名が登録されています`);return;}
+      list.push(name);
+      if(isClient){masterData.prices[name]={};state.settingsClient=name;}
+      if(!state.currentStaff && !isClient){state.currentStaff=name;localStorage.setItem(STAFF_KEY,name);}
+      saveMasterData();closeModal();render();showToast(`${label}を追加しました`);
+    });
+    setTimeout(()=>document.getElementById("masterNameInput")?.focus(),0);
+  }
+
+  function savePriceMaster(event) {
+    event.preventDefault();
+    const client=state.settingsClient;
+    if(!client)return;
+    const fd=new FormData(event.currentTarget);
+    masterData.prices[client] ||= {};
+    manuals.forEach(m=>{
+      masterData.prices[client][m.id]={
+        billing:Number(fd.get(`billing__${m.id}`))||0,
+        pay:Number(fd.get(`pay__${m.id}`))||0,
+      };
+    });
+    saveMasterData();
+    showToast(`${client}の単価を保存しました`);
+  }
+
+  function openJobModal(job=null, options={}) {
+    const duplicate=Boolean(options.duplicate); const edit=Boolean(job) && !duplicate; const today=TODAY;
+    el.modal.innerHTML=`<form id="jobForm"><div class="modal-header"><h2 id="modalTitle">${edit?"案件を編集":duplicate?"案件を複製":"新しい案件"}</h2><button class="close-btn" type="button" data-close>×</button></div><div class="modal-body">
       <div class="form-section-title">基本情報</div>
       <div class="form-grid">
-        <div class="form-group"><label>元請け *</label><select id="jobClient" name="client" class="form-control" required><option value="">選択してください</option>${["A管理会社","B不動産","その他"].map(x=>`<option ${job?.client===x?"selected":""}>${x}</option>`).join("")}</select></div>
-        <div class="form-group"><label>担当者 *</label><select name="worker" class="form-control" required>${["未設定","山田","佐藤"].map(x=>`<option ${job?.worker===x?"selected":""}>${x}</option>`).join("")}</select></div>
+        <div class="form-group"><label>元請け *</label><select id="jobClient" name="client" class="form-control" required><option value="">選択してください</option>${clientNames().map(x=>`<option ${job?.client===x?"selected":""}>${esc(x)}</option>`).join("")}</select></div>
+        <div class="form-group"><label>担当者 *</label><select name="worker" class="form-control" required>${["未設定",...staffNames()].map(x=>`<option ${job?.worker===x?"selected":""}>${esc(x)}</option>`).join("")}</select></div>
         <div class="form-group"><label>作業日 *</label><input name="date" type="date" class="form-control" value="${job?.date||today}" required></div>
         <div class="form-group"><label>時間 *</label><div style="display:flex;gap:8px"><input name="start" type="time" class="form-control" value="${job?.start||"09:00"}" required><input name="end" type="time" class="form-control" value="${job?.end||""}"></div></div>
         <div class="form-group full"><label>現場名 *</label><input name="site" class="form-control" value="${esc(job?.site||"")}" placeholder="例：〇〇マンション 203号室" required></div>
@@ -616,7 +715,7 @@
     if(!edit) recalc();
     clientSelect.addEventListener("change",recalc);
     form.querySelectorAll('input[name="tasks"]').forEach(x=>x.addEventListener("change",recalc));
-    form.addEventListener("submit",e=>{e.preventDefault();const fd=new FormData(e.currentTarget);const tasks=fd.getAll("tasks");if(!tasks.length){showToast("作業内容を1つ以上選択してください");return;}const payload={id:job?.id||`J${Date.now()}`,date:fd.get("date"),start:fd.get("start"),end:fd.get("end"),client:fd.get("client"),site:fd.get("site"),address:fd.get("address"),phone:fd.get("phone"),worker:fd.get("worker"),tasks,status:job?.status||"planned",note:fd.get("note"),billing:Number(fd.get("billing"))||0,pay:Number(fd.get("pay"))||0,expense:Number(fd.get("expense"))||0,issue:job?.issue||false,issueText:job?.issueText||"",photos:job?.photos||{before:[],after:[]},completedAt:job?.completedAt||"",reviewedAt:job?.reviewedAt||""};if(edit)jobs=jobs.map(j=>j.id===job.id?payload:j);else jobs.push(payload);saveJobs();closeModal();state.view="jobs";render();showToast(edit?"案件を更新しました":"案件を登録しました");});
+    form.addEventListener("submit",e=>{e.preventDefault();const fd=new FormData(e.currentTarget);const tasks=fd.getAll("tasks");if(!tasks.length){showToast("作業内容を1つ以上選択してください");return;}const payload={id:edit?job.id:`J${Date.now()}`,date:fd.get("date"),start:fd.get("start"),end:fd.get("end"),client:fd.get("client"),site:fd.get("site"),address:fd.get("address"),phone:fd.get("phone"),worker:fd.get("worker"),tasks,status:edit?(job?.status||"planned"):"planned",note:fd.get("note"),billing:Number(fd.get("billing"))||0,pay:Number(fd.get("pay"))||0,expense:Number(fd.get("expense"))||0,issue:edit?(job?.issue||false):false,issueText:edit?(job?.issueText||""):"",photos:edit?(job?.photos||{before:[],after:[]}):{before:[],after:[]},completedAt:edit?(job?.completedAt||""):"",reviewedAt:edit?(job?.reviewedAt||""):""};if(edit)jobs=jobs.map(j=>j.id===job.id?payload:j);else jobs.push(payload);saveJobs();closeModal();state.view="jobs";render();showToast(edit?"案件を更新しました":duplicate?"案件を複製しました":"案件を登録しました");});
   }
 
   function openBillingDetail(type,name) {
@@ -681,14 +780,14 @@
   }
 
   function exportData() {
-    const payload={version:"v004",exportedAt:new Date().toISOString(),jobs,invoiceSettings};
+    const payload={version:"v005",exportedAt:new Date().toISOString(),jobs,invoiceSettings,masterData};
     const blob=new Blob([JSON.stringify(payload,null,2)],{type:"application/json"});
     const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download=`cleanflow-backup-${new Date().toISOString().slice(0,10)}.json`; a.click(); URL.revokeObjectURL(url); showToast("バックアップを保存しました");
   }
   function importData(event) {
     const file=event.target.files?.[0]; if(!file)return;
     const reader=new FileReader();
-    reader.onload=()=>{try{const data=JSON.parse(reader.result);if(!Array.isArray(data.jobs))throw new Error();jobs=data.jobs.map(normalizeJob);invoiceSettings={...defaultInvoiceSettings,...(data.invoiceSettings||{})};saveJobs();saveInvoiceSettings();render();showToast("バックアップを復元しました");}catch{showToast("バックアップファイルを読み込めませんでした");}finally{event.target.value="";}};
+    reader.onload=()=>{try{const data=JSON.parse(reader.result);if(!Array.isArray(data.jobs))throw new Error();jobs=data.jobs.map(normalizeJob);invoiceSettings={...defaultInvoiceSettings,...(data.invoiceSettings||{})};masterData=data.masterData&&Array.isArray(data.masterData.clients)&&Array.isArray(data.masterData.staff)?data.masterData:masterData;saveJobs();saveInvoiceSettings();saveMasterData();render();showToast("バックアップを復元しました");}catch{showToast("バックアップファイルを読み込めませんでした");}finally{event.target.value="";}};
     reader.readAsText(file);
   }
 
