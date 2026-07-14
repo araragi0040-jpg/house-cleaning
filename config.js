@@ -7,7 +7,7 @@
  */
 window.CLEANFLOW_CONFIG = Object.freeze({
   appVersion: "v006",
-  apiUrl: "",
+  apiUrl: "https://script.google.com/macros/s/AKfycbweJF9k2R2UI0PfoyGI0icKcZV7uAGGQsJGqIndOhoRlPbG7liWB66Ef50MqqP_2yft/exec",
   requireLogin: true,
   allowLocalDemo: true,
   requestTimeoutMs: 25000,
